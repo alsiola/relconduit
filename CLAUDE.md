@@ -43,7 +43,8 @@ checks yourself before you open or update a PR.
   re-implement a metric or re-split the data. Test predictions for the leaderboard are written with
   `relbench.submit.write_prediction_table` and checked with `uv run python -m relbench.submit <pred_dir>`.
 - Respect the temporal split. Train only on the train table, tune on val, touch test only for a final reported number.
-  Any feature must be computable from rows whose timestamp is at or before the seed time; leakage invalidates a result.
+  Any feature must be computable only from rows whose timestamp is strictly before the seed time (the
+  leaderboard rule: drop every row dated at or after it); leakage invalidates a result.
 - Report the task's official metric, the number of seeds (at least 3 for a reported result), and mean and std.
 - Compare against the published baselines (the RelBench leaderboard and paper) and say where a result sits. Don't claim
   a state-of-the-art result unless it beats the leaderboard on test with the official evaluation.
