@@ -1,0 +1,4 @@
+{
+  "$comment": "What relconduit has spent, in US dollars, against config/cloud.json's budgetUsd. Written by relconduit.cloud for each rented machine and by `uv run costs add` for anything paid by hand; each entry is pushed straight to main. See src/relconduit/costs.py.",
+  "entries": []
+}

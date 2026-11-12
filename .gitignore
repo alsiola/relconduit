@@ -18,5 +18,6 @@ wandb/
 runs/
 
 # Local
+.local/
 .env
 .DS_Store

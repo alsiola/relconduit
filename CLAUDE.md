@@ -10,8 +10,13 @@ checks yourself before you open or update a PR.
 - Python is managed by `uv`. Use `uv run ...` and `uv add ...`; never `pip install`. Don't add a `.python-version`
   file: this machine's pyenv shims intercept it and break `uv`.
 - Run `uv sync --all-extras` after pulling dependency changes.
-- Hardware is a single Apple Silicon Mac. Use the `mps` torch device when it's available, else `cpu`. No CUDA. Size
-  experiments to finish in hours, not days, and say in the PR how long a run took.
+- Compute is an Apple Silicon Mac, plus Google Cloud Spot machines for long runs within a **$50 total budget**: 24-vCPU
+  CPU machines now, and a single T4 or L4 GPU only if the owner enables one. Read the `cloud-compute` skill before any
+  run you expect to take the Mac more than about an hour, and never rent a machine without the owner's approval on the
+  issue. Pick the torch device as `cuda`, then `mps`, then `cpu`. Size experiments to finish in hours, not days, and say
+  in the PR how long a run took and where it ran.
+- Anything that should keep running after your turn (a long training run, a cloud run) starts with
+  `claude-code.task.start` and ends the turn with `claude-code.task.wait`. Background shell jobs die with the turn.
 - RelBench 3.x loads datasets from the Hugging Face Hub (`stanford-star/relbench-v1/<dataset>`) into the HF cache
   (`~/.cache/huggingface`). Never commit datasets, caches, checkpoints or large artefacts
   (`.gitignore` covers the usual ones). Anything over about 1 MB doesn't belong in git.
@@ -24,6 +29,8 @@ checks yourself before you open or update a PR.
 - `results/<dataset>/<task>.jsonl`: one JSON object per run, appended, never rewritten. Fields: `date`, `approach`
   (its experiment path), `commit`, `metric`, `split` (`val` or `test`), `value`, `seeds`, `runtime_minutes`, `notes`.
 - `tests/`: pytest. Shared code in `src/` needs tests.
+- `config/cloud.json`, `src/relconduit/cloud.py`, `src/relconduit/costs.py`: the cloud runner and the cost ledger
+  (`costs/ledger.json`, written to main by the runner, never edited by hand). `uv run costs` shows the budget.
 
 ## Benchmark integrity
 

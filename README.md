@@ -16,6 +16,11 @@ uv run pytest
 
 RelBench 3.x downloads datasets from the Hugging Face Hub on first use (into `~/.cache/huggingface`).
 
+## Cloud runs
+
+Long runs go to Google Cloud Spot machines with `uv run cloud-run` (24 vCPUs; GPUs once enabled), within a $50 budget
+tracked in `costs/ledger.json`. Run `uv run costs` for the spend so far. See `.claude/skills/cloud-compute/SKILL.md`.
+
 ## Layout
 
 - `src/relconduit/`: shared code (data loading, feature engineering, models, evaluation helpers).
