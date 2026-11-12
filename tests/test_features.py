@@ -251,7 +251,7 @@ TIMED_SEEDS = pd.DataFrame(
     },
     index=[20, 21, 22, 23, 24],
 )
-TIMED_CFG = FeatureConfig(windows=(30, None), hop2_all_via=("users",))
+TIMED_CFG = FeatureConfig(windows=(30, None), hop2_all_via=("users",), siblings_via=("club_id",))
 
 
 def timed_feats(cfg=TIMED_CFG, db=None, seeds=TIMED_SEEDS):
@@ -345,6 +345,18 @@ def test_hop2_all_chain_goes_one_link_further():
     leaky = replace(cfg, _inclusive=True)
     bad = leakage_mismatches(db, TIMED_SEEDS, "users", "user_id", "time", leaky)
     assert any(c == col for _, c, *_ in bad)
+
+
+def test_siblings_pool_entities_sharing_a_parent():
+    X = timed_feats()
+    col = "users.club_id>>events__count__all"
+    # Seed 22: user 1 (club 1, shared with user 2) at 04-01: events 2, 4 and 5.
+    assert X.loc[22, col] == 3
+    assert X.loc[22, "users.club_id>>events__value__mean__all"] == pytest.approx(4.5)
+    # Seed 20: user 0 is alone in club 0: its own event 0 (event 1 is at the seed time).
+    assert X.loc[20, col] == 1
+    # Seed 21: user 1 at its own sign-up time, so its club is not known yet.
+    assert X.loc[21, col] == 0
 
 
 def test_hop2_all_is_opt_in():

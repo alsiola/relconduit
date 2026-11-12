@@ -10,12 +10,14 @@ from relconduit.results import append_record, git_commit
 DATASET = "rel-trial"
 TASK = "study-adverse"
 APPROACH = "experiments/rel-trial/study-adverse/dfs-lightgbm"
-# Windows: the 365-day horizon, 4x it, and all time. Hop 2 over all memberships walks
-# the link tables to the study's conditions, sponsors, interventions and sites, and from
-# there to their other studies.
+# Windows: the 365-day horizon, 4x it, and all time. Hop 2 over all memberships walks the
+# link tables to the study's conditions, sponsors, interventions and sites (their link
+# counts), and one link further to those parents' other studies and what they reported
+# before the seed time (e.g. the sponsor's past adverse events).
+_VIA = ("conditions", "sponsors", "interventions", "facilities")
 FEATURES = FeatureConfig(
     windows=(365, 1460, None),
-    hop2_all_via=("conditions", "sponsors", "interventions", "facilities"),
+    hop2_all_via=_VIA + tuple(f"{p}>studies" for p in _VIA),
 )
 # Feature sets tried on val besides all / no hop 2: the top k by gain of one reference fit.
 PRUNE_TOP_K = (100, 300, 1000)

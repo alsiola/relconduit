@@ -10,9 +10,14 @@ from relconduit.results import append_record, git_commit
 DATASET = "rel-avito"
 TASK = "ad-ctr"
 APPROACH = "experiments/rel-avito/ad-ctr/dfs-lightgbm"
-# Windows: 1 day, the 4-day horizon, and all time (the database spans 19 days). Hop 2
-# over all memberships walks to the users who saw the ad and the searches it appeared in.
-FEATURES = FeatureConfig(windows=(1, 4, None), hop2_all_via=("UserInfo", "SearchInfo"))
+# Windows: 1 day, the 4-day horizon, and all time (the database spans 19 days). Hop 2 over
+# all memberships walks to the users who saw the ad and the searches it appeared in; siblings
+# pool the history of every ad in the same category and in the same location.
+FEATURES = FeatureConfig(
+    windows=(1, 4, None),
+    hop2_all_via=("UserInfo", "SearchInfo"),
+    siblings_via=("CategoryID", "LocationID"),
+)
 # Feature sets tried on val besides all / no hop 2: the top k by gain of one reference fit.
 PRUNE_TOP_K = (100, 300, 1000)
 

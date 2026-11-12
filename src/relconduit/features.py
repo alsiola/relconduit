@@ -27,6 +27,10 @@ Paths, with ``E`` the entity table:
   friendship table). Computed per distinct ``(P, seed time)`` and rolled up, which keeps
   fan-out manageable and gives exactly the counts, means, minima, maxima and null fractions of
   the pooled ``T2`` rows. Named ``<T>.<fk to P>>><T2>__...``.
+* siblings, ``E -> P <- E' <- T``, for the foreign keys of ``E`` named in
+  :attr:`FeatureConfig.siblings_via`: the same pooled aggregates over the ``T`` rows of every
+  entity sharing the seed entity's parent (e.g. the click-through of all ads in its
+  category). Named ``<E>.<fk>>><T>__...``.
 
 Aggregates per numeric column, for each window (days before the seed time, ``None`` for all
 time): ``count`` (one per path, not per column), ``mean``, ``min``, ``max`` and, for float
@@ -79,6 +83,8 @@ class FeatureConfig:
     hop2: bool = True
     # Parent tables P to walk as E <- T -> P <- T2 over every linked P (see the module doc).
     hop2_all_via: Sequence[str] = ()
+    # Foreign keys of E to walk as E -> P <- E' <- T (see :meth:`_Builder.siblings`).
+    siblings_via: Sequence[str] = ()
     # Tables never read (whole tables, as path steps or targets).
     exclude_tables: Sequence[str] = ()
     # (table, column) pairs never used as feature values.
@@ -443,30 +449,64 @@ class _Builder:
         out = []
         for t2_name, t2, fk2, suffix in self._t2_children(ptable):
             prefix = f"{base}>>{t2_name}{suffix}"
-            cols = [(c, _nullable(t2, c)) for c in _numeric_cols(t2, t2_name, self.cfg)]
-            cats = [
-                (c, v) for c, _, v in self._cat_spec(t2, t2_name) if len(v) <= MAX_COUNT_CATEGORIES
-            ]
-            inner, outer = self._rollup_selects(prefix, cols, cats)
-            sql = f"""
-            WITH k AS (SELECT DISTINCT __pid, {_SEED_T} FROM {links}),
-            ev AS (
-                SELECT k.__pid, k.{_SEED_T}, e2.{_q(t2.time_col)} AS {_EV_T}
-                       {"".join(f", e2.{_q(c)} AS {_q(c)}" for c, _ in cols + cats)}
-                FROM k
-                JOIN {_q(t2_name)} e2
-                  ON e2.{_q(fk2)} = k.__pid
-                 AND e2.{_q(t2.time_col)} {self.lt} k.{_SEED_T}
-            ),
-            a AS (
-                SELECT __pid, {_SEED_T}, {", ".join(inner)}
-                FROM ev GROUP BY __pid, {_SEED_T}
-            )
-            SELECT lk.{_SEED_IDX}, {", ".join(outer)}
-            FROM {links} lk JOIN a ON a.__pid = lk.__pid AND a.{_SEED_T} = lk.{_SEED_T}
-            GROUP BY lk.{_SEED_IDX}, lk.{_SEED_T}
-            """
-            out.append(self._run(sql))
+            out.append(self._rollup(links, _q(t2_name), t2_name, t2, fk2, prefix))
+        return out
+
+    def _rollup(
+        self, links: str, source: str, t2_name: str, t2: Table, fk2: str, prefix: str
+    ) -> pd.DataFrame:
+        """Pooled aggregates of the rows of ``source`` (T2's columns, or a relation with them)
+        whose ``fk2`` is one of the seed's linked ``__pid``, strictly before the seed time."""
+        cols = [(c, _nullable(t2, c)) for c in _numeric_cols(t2, t2_name, self.cfg)]
+        cats = [(c, v) for c, _, v in self._cat_spec(t2, t2_name) if len(v) <= MAX_COUNT_CATEGORIES]
+        inner, outer = self._rollup_selects(prefix, cols, cats)
+        sql = f"""
+        WITH k AS (SELECT DISTINCT __pid, {_SEED_T} FROM {links}),
+        ev AS (
+            SELECT k.__pid, k.{_SEED_T}, e2.{_q(t2.time_col)} AS {_EV_T}
+                   {"".join(f", e2.{_q(c)} AS {_q(c)}" for c, _ in cols + cats)}
+            FROM k
+            JOIN {source} e2
+              ON e2.{_q(fk2)} = k.__pid
+             AND e2.{_q(t2.time_col)} {self.lt} k.{_SEED_T}
+        ),
+        a AS (
+            SELECT __pid, {_SEED_T}, {", ".join(inner)}
+            FROM ev GROUP BY __pid, {_SEED_T}
+        )
+        SELECT lk.{_SEED_IDX}, {", ".join(outer)}
+        FROM {links} lk JOIN a ON a.__pid = lk.__pid AND a.{_SEED_T} = lk.{_SEED_T}
+        GROUP BY lk.{_SEED_IDX}, lk.{_SEED_T}
+        """
+        return self._run(sql)
+
+    def siblings(self) -> list[pd.DataFrame]:
+        """E -> P <- E' <- T for E's foreign keys named in ``siblings_via``: the pooled rows of
+        each time-stamped child T over every entity sharing the seed entity's parent P
+        (e.g. all ads in the ad's category), strictly before the seed time."""
+        e = self.tables[self.entity_table]
+        out = []
+        for fk in self.cfg.siblings_via:
+            seen = ""
+            if e.time_col is not None:  # an unborn entity's parent is not known
+                seen = f"AND ent.{_q(e.time_col)} {self.lt} s.{_SEED_T}"
+            self.con.execute(f"""
+                CREATE OR REPLACE TEMP TABLE lks AS
+                SELECT s.{_SEED_IDX}, s.{_SEED_T}, ent.{_q(fk)} AS __pid
+                FROM seeds s
+                JOIN {_q(self.entity_table)} ent ON ent.{_q(e.pkey_col)} = s.{_SEED_ID} {seen}
+                WHERE ent.{_q(fk)} IS NOT NULL
+            """)
+            for child, tfk in self.child_paths():
+                t = self.tables[child]
+                source = (
+                    f"(SELECT c.*, ent.{_q(fk)} AS __sibp FROM {_q(child)} c "
+                    f"JOIN {_q(self.entity_table)} ent ON c.{_q(tfk)} = ent.{_q(e.pkey_col)})"
+                )
+                prefix = f"{self.entity_table}.{fk}>>{child}"
+                if self._n_fks(child) > 1:
+                    prefix += f".{tfk}"
+                out.append(self._rollup("lks", source, child, t, "__sibp", prefix))
         return out
 
     def _rollup_selects(
@@ -619,6 +659,8 @@ def build_features(
         if cfg.hop2_all_via:
             for child, fk in b.child_paths(timed=False):
                 parts.extend(b.hop2_all(child, fk))
+        if cfg.siblings_via:
+            parts.extend(b.siblings())
     finally:
         b.close()
     base = pd.DataFrame(index=pd.Index(s[_SEED_IDX], name=_SEED_IDX))
