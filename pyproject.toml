@@ -1,0 +1,37 @@
+[project]
+name = "relconduit"
+version = "0.1.0"
+description = "Agent-driven experiments on the RelBench relational deep learning benchmark"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "relbench>=3.1",
+]
+
+[project.optional-dependencies]
+# Gradient-boosted baselines over flattened/aggregated features
+gbdt = ["lightgbm", "scikit-learn"]
+# Relational deep learning (RDL) baselines: GNNs over the relational entity graph
+gnn = [
+    "torch",
+    "torch_geometric",
+    "pytorch_frame[full]",
+    "sentence-transformers",
+]
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/relconduit"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

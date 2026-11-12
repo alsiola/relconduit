@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Data and model artefacts (RelBench caches datasets under ~/.cache/relbench; keep anything local out of git)
+data/
+cache/
+checkpoints/
+*.parquet
+*.pt
+*.ckpt
+wandb/
+runs/
+
+# Local
+.env
+.DS_Store
