@@ -1,4 +1,21 @@
 {
   "$comment": "What relconduit has spent, in US dollars, against config/cloud.json's budgetUsd. Written by relconduit.cloud for each rented machine and by `uv run costs add` for anything paid by hand; each entry is pushed straight to main. See src/relconduit/costs.py.",
-  "entries": []
+  "entries": [
+    {
+      "at": "2026-11-12T19:13:08+00:00",
+      "kind": "cloud",
+      "what": "relconduit-setup-1a1d12b3130: mkdir -p runs/smoke && uv run python -c \"import relbench, torch, torch_geometric, lightgbm; ds = relbench.load_dataset(\\",
+      "issue": "setup",
+      "usd": 0.01,
+      "priced": "catalogue",
+      "cloud": {
+        "machine": "n2-custom-24-24576",
+        "gpu": null,
+        "zone": "europe-west2-b",
+        "diskGb": 100,
+        "hours": 0.044,
+        "usdPerHour": 0.2595
+      }
+    }
+  ]
 }
