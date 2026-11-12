@@ -5,6 +5,7 @@ description = "Agent-driven experiments on the RelBench relational deep learning
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+    "duckdb>=2.0.0",
     "relbench>=3.1",
 ]
 
@@ -36,6 +37,8 @@ packages = ["src/relconduit"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Upstream RelBench example scripts, kept verbatim so the baseline reproduction is exact.
+extend-exclude = ["experiments/*/baselines/upstream"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
