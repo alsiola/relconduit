@@ -191,7 +191,7 @@ def _keep_top_per_row(m: sp.csr_matrix, k: int) -> sp.csr_matrix:
         ties = np.flatnonzero(v == thr)  # in column order
         sel[ties[: k - int(sel.sum())]] = True
         keep[a:b] = sel
-    indptr = np.concatenate([[0], np.cumsum(np.add.reduceat(keep, m.indptr[:-1]) * (lengths > 0))])
+    indptr = np.concatenate([[0], np.cumsum(keep)])[m.indptr]
     return sp.csr_matrix((m.data[keep], m.indices[keep], indptr), shape=m.shape)
 
 

@@ -263,9 +263,28 @@ def test_keep_top_per_row_breaks_ties_by_lower_column():
 
     from relconduit.link import _keep_top_per_row
 
-    m = sp.csr_matrix(
-        np.array([[0.5, 0.2, 0.5, 0.0, 0.5], [0.1, 0.0, 0.0, 0.0, 0.0], [0.3, 0.3, 0.3, 0.9, 0.0]])
-    )
+    rows = [
+        [0.0, 0.0, 0.0, 0.0, 0.0],  # empty rows first, between and last
+        [0.5, 0.2, 0.5, 0.0, 0.5],
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.1, 0.0, 0.0, 0.0, 0.0],
+        [0.3, 0.3, 0.3, 0.9, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+    ]
+    m = sp.csr_matrix(np.array(rows))
     got = _keep_top_per_row(m, 2).toarray()
-    want = np.array([[0.5, 0, 0.5, 0, 0], [0.1, 0, 0, 0, 0], [0.3, 0, 0, 0.9, 0]])
+    want = np.zeros((6, 5))
+    want[1, [0, 2]] = 0.5
+    want[3, 0] = 0.1
+    want[4, [0, 3]] = [0.3, 0.9]
     np.testing.assert_array_equal(got, want)
+
+
+def test_tight_beams_cut_walks_and_still_do_not_leak():
+    cfg = replace(
+        config(),
+        paths={"covisit": Path(("visits", "~visits", "visits"), n=1, beam=1, max_fanout=1)},
+    )
+    pairs = build_pairs(tiny_db(), SEEDS, "user_id", "time", cfg)
+    assert (pairs.groupby(SEED)["covisit__score"].apply(lambda s: (s > 0).sum()) <= 1).all()
+    assert pair_leakage_mismatches(tiny_db(), SEEDS, "user_id", "time", cfg) == []
