@@ -39,6 +39,12 @@ def test_select_columns_pruned_sets():
         select_columns(cols, "top2")
 
 
+def test_select_columns_drop_sets():
+    cols = ["a__x", "enc__city__te", "enc__city__count", "enc__name__emb0"]
+    assert select_columns(cols, "drop:enc__") == ["a__x"]
+    assert select_columns(cols, "drop:__te,__emb") == ["a__x", "enc__city__count"]
+
+
 def test_gain_ranking_puts_the_signal_first():
     rng = np.random.default_rng(0)
     n = 800

@@ -8,6 +8,7 @@ import pytest
 from relbench.base import Database, Table
 
 from relconduit.features import (
+    MAX_CATEGORIES,
     FeatureConfig,
     build_features,
     feature_vocab,
@@ -389,6 +390,50 @@ def test_vocab_is_shared_by_leakage_builds():
     assert list(timed_feats(cfg, db=early, seeds=seeds).columns) == list(
         timed_feats(cfg, seeds=seeds).columns
     )
+
+
+def test_vocab_before_leaves_out_categories_first_seen_later():
+    db = timed_db()
+    vocab = feature_vocab(db, before=D("2020-03-01"))
+    # "no" and "maybe" first appear on 2020-04-01; "yes" on 2020-02-01.
+    assert vocab[("events", "status")] == ["yes"]
+    # users is time-stamped too: "fr" belongs to a user who joins exactly on the cutoff.
+    assert vocab[("users", "country")] == ["uk"]
+    # Static tables are read whole.
+    assert vocab[("clubs", "kind")] == ["a", "b"]
+    assert feature_vocab(db)[("events", "status")] == ["maybe", "no", "yes"]
+
+
+def test_vocab_before_decides_whether_a_column_is_kept():
+    db = timed_db()
+    ev = db.table_dict["events"]
+    later = pd.DataFrame(
+        {
+            "event_id": range(100, 100 + MAX_CATEGORIES + 5),
+            "user_id": 0,
+            "time": D("2021-01-01"),
+            "status": [f"s{i}" for i in range(MAX_CATEGORIES + 5)],
+            "value": 0.0,
+        }
+    )
+    db = Database(
+        {
+            **db.table_dict,
+            "events": Table(
+                pd.concat([ev.df, later], ignore_index=True),
+                ev.fkey_col_to_pkey_table,
+                pkey_col=ev.pkey_col,
+                time_col=ev.time_col,
+            ),
+        }
+    )
+    # Values first seen after the cutoff would push the column over MAX_CATEGORIES.
+    assert ("events", "status") not in feature_vocab(db)
+    assert feature_vocab(db, before=D("2020-12-31"))[("events", "status")] == [
+        "maybe",
+        "no",
+        "yes",
+    ]
 
 
 # --- rel-f1 -----------------------------------------------------------------------------
