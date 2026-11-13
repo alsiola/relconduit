@@ -72,6 +72,14 @@
       "issue": "12",
       "usd": 0.21,
       "priced": "entered"
+    },
+    {
+      "at": "2026-11-13T14:42:11+00:00",
+      "kind": "cloud",
+      "what": "relconduit-12-1a1d43a64ca",
+      "issue": "12",
+      "usd": 2.42,
+      "priced": "entered"
     }
   ]
 }
