@@ -1,6 +1,6 @@
 ---
 name: cloud-compute
-description: "Rent a Google Cloud Spot machine for one long run (a multi-seed training run, a hyperparameter sweep, a dataset too big for the Mac) with `uv run cloud-run`: when it's worth it, getting the owner's go-ahead first, the $50 budget, running it as a task that outlives your turn, checkpoints, and reporting the cost. Use before any run you expect to take the Mac more than about an hour, and before running anything on Google Cloud."
+description: "Rent a Google Cloud Spot machine for one long run (a multi-seed training run, a hyperparameter sweep, a dataset too big for the Mac) with `uv run cloud-run`: when it's worth it, getting the owner's go-ahead first, the $50 budget, running it as a task that outlives your turn, checkpoints, and reporting the cost. Use before any run you expect to hold the Mac's CPU for more than about 20–30 minutes, and before running anything on Google Cloud."
 ---
 
 # Cloud compute
@@ -26,13 +26,15 @@ Then end the turn asking for help (status `help`) so the owner can answer. `--ap
 
 ## When it's worth it
 
-- Runs that would hold the Mac for more than about two hours and split across cores: many seeds or settings run side by side (`joblib`, `multiprocessing`, LightGBM's `n_jobs`), feature builds over large tables.
+The owner would rather spend a little of the $50 than have the Mac's CPU tied up, so lean towards the cloud, ask for the go-ahead when you scope the issue, and run jobs side by side to use all 24 vCPUs.
+
+- Runs that would hold the Mac's CPU for more than about 20–30 minutes and split across cores: many seeds or settings run side by side (`joblib`, `multiprocessing`, LightGBM's `n_jobs`), feature builds over large tables.
 - The big RelBench datasets (`rel-amazon`, `rel-hm`, `rel-stack`, `rel-avito`, `rel-event`) when they don't fit comfortably in the Mac's memory. The 24-vCPU machine has 24 GB; give it more with `--machine n2-custom-24-65536` (about $0.31/h) if needed.
 - GPU training, once a GPU is allowed (below).
 
 Not worth it:
 
-- Runs under an hour. Setting up takes 10–15 minutes (machine, `uv sync`, dataset download).
+- Runs under about 20 minutes. Setting up takes 10–15 minutes (machine, `uv sync`, dataset download).
 - Single-threaded work: a bigger machine won't help unless the script splits its work. Check first, and add the split if it's easy.
 - Anything needing secrets. The machine gets no keys and no `.env`.
 
