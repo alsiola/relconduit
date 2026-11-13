@@ -32,6 +32,7 @@ import json
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -62,7 +63,19 @@ CHANGES = [
 ]
 ROUNDS = {0.03: 3000, 0.01: 10000}
 EARLY_STOPPING = 100
-FEATURE_SETS = ("base11", "base", "base+text", "base+tags", "base+text+tags")
+FEATURE_SETS = (
+    "base11",
+    "base",
+    "base+text",
+    "base+tags",
+    "base+text+tags",
+    "base+text+tags+graph",
+    "base+text+tags+short",
+    "base+text+tags+graph+short",
+)
+ROUND2_SETS = FEATURE_SETS[-3:]
+SHORT_WINDOWS = (7, 14)
+SHORT_SUFFIXES = ("__7d", "__14d")
 
 
 def _dfs11():
@@ -89,25 +102,37 @@ def is_dump_licence(col: str) -> bool:
     return path.split(">")[-1].split(".")[0] == "posts"
 
 
+def is_short(col: str) -> bool:
+    return col.endswith(SHORT_SUFFIXES)
+
+
 def select(columns, feature_set: str) -> list[str]:
-    base11 = [c for c in columns if not c.startswith("text__") and ">" not in c]
+    plain = [c for c in columns if not c.startswith("text__") and not is_short(c)]
+    base11 = [c for c in plain if ">" not in c]
     if feature_set == "base11":
         return base11
     base = [c for c in base11 if not is_dump_licence(c)]
     text = [c for c in columns if c.startswith("text__") and not c.startswith("text__tag_")]
     tags = [c for c in columns if c.startswith("text__tag_")]
+    graph = [c for c in plain if ">" in c and not is_dump_licence(c)]
+    short = [c for c in columns if is_short(c) and ">" not in c and not is_dump_licence(c)]
     return {
         "base": base,
         "base+text": base + text,
         "base+tags": base + tags,
         "base+text+tags": base + text + tags,
+        "base+text+tags+graph": base + text + tags + graph,
+        "base+text+tags+short": base + text + tags + short,
+        "base+text+tags+graph+short": base + text + tags + graph + short,
     }[feature_set]
 
 
 def build(out: Path, smoke: bool) -> None:
     """Feature parquet files for train, val and test, and the labels of train and val."""
     fdir, tdir = feature_dirs(out)
-    if (fdir / "done.json").exists() and (tdir / "X_test.parquet").exists():
+    done = fdir / "done.json"
+    built = done.exists() and (tdir / "X_test.parquet").exists()
+    if built and any(is_short(c) for c in json.loads(done.read_text())["columns"]):
         return
     import relbench
 
@@ -127,6 +152,10 @@ def build(out: Path, smoke: bool) -> None:
     base_db = type(db)({k: v for k, v in db.table_dict.items() if k != "revisions"})
     cfg = FEATURES
     cfg.vocab = feature_vocab(base_db, cfg, before=ds.val_timestamp)
+    # Round 2: the same paths over the last 7 and 14 days (hop 1 only).
+    short_cfg = replace(
+        cfg, windows=SHORT_WINDOWS, aggs=("mean", "sum"), hop2=False, siblings_via=()
+    )
     key = [task.entity_col, task.time_col]
     fdir.mkdir(parents=True, exist_ok=True)
     tdir.mkdir(parents=True, exist_ok=True)
@@ -141,7 +170,9 @@ def build(out: Path, smoke: bool) -> None:
             seeds = df.iloc[lo : lo + chunk][key]
             X = build_features(base_db, seeds, task.entity_table, *key, cfg)
             T = post_text_features(db, seeds, *key)
-            X = pd.concat([X, T], axis=1)
+            S = build_features(base_db, seeds, task.entity_table, *key, short_cfg)
+            S = S[[c for c in S.columns if is_short(c)]]
+            X = pd.concat([X, T, S], axis=1)
             num = X.select_dtypes(include="number").columns
             X[num] = X[num].astype("float32")
             parts.append(X)
@@ -375,6 +406,58 @@ def tune(out: Path, jobs: int, smoke: bool) -> dict:
     return summary
 
 
+def tune2(out: Path, jobs: int, smoke: bool) -> dict:
+    """Round 2, after round 1 (``tune``) and before test: the graph paths (hop 2 and the owner's
+    other posts, licences still dropped) and 7- and 14-day windows, on top of round 1's
+    features. Each set at round 1's lr-0.03 config over three seeds; the best, if its mean beats
+    round 1's at that config, again at lr 0.01 over three seeds, kept if it beats round 1's final.
+    """
+    t0 = time.time()
+    r1_path = out / "summary_val_round1.json"
+    if not r1_path.exists():
+        (out / "summary_val.json").rename(r1_path)
+    r1 = json.loads(r1_path.read_text())
+    build(out, smoke)
+    sample, base_set, slow = r1["sample"], r1["features"], r1["config"]
+    fast = {**slow, "learning_rate": 0.03}
+    seeds = (0, 1, 2)
+    fast_r1 = run_all(out, [spec(sample, base_set, fast, s) for s in seeds], jobs, smoke)
+    f = run_all(out, [spec(sample, fs, fast, s) for fs in ROUND2_SETS for s in seeds], jobs, smoke)
+    means = {base_set: np.mean([r["val"] for r in fast_r1])}
+    for i, fs in enumerate(ROUND2_SETS):
+        means[fs] = float(np.mean([r["val"] for r in f[3 * i : 3 * i + 3]]))
+    print(f"[stage F] 3-seed val means at lr 0.03: {means}", flush=True)
+    best_set = min(means, key=means.get)
+    final_set, final = base_set, None
+    g = []
+    if best_set != base_set:
+        g = run_all(out, [spec(sample, best_set, slow, s) for s in seeds], jobs, smoke)
+        if np.mean([r["val"] for r in g]) < r1["val_mean"]:
+            final_set, final = best_set, g
+    if final is None:
+        final = [json.loads((out / "fits" / f"{n}.json").read_text()) for n in r1["final_fits"]]
+    vals = [r["val"] for r in final]
+    print(f"[stage G] final features {final_set}: val {np.mean(vals):.5f}", flush=True)
+    summary = {
+        **r1,
+        "features": final_set,
+        "final_fits": [fit_name(spec(sample, final_set, slow, s)) for s in seeds],
+        "val_scores": vals,
+        "val_mean": float(np.mean(vals)),
+        "val_std": float(np.std(vals, ddof=1)),
+        "best_iterations": [r["best_iteration"] for r in final],
+        "round2": {"F_means": means, "F": fast_r1 + f, "G": g},
+        "runtime_minutes": r1["runtime_minutes"] + (time.time() - t0) / 60,
+    }
+    (out / "summary_val.json").write_text(json.dumps(summary, indent=2))
+    (out / "done2.json").write_text(json.dumps({"ok": True}))
+    print(
+        json.dumps({k: v for k, v in summary.items() if k not in ("stages", "round2")}, indent=2),
+        flush=True,
+    )
+    return summary
+
+
 # --- test, once ---------------------------------------------------------------------------------
 
 
@@ -434,12 +517,14 @@ def test(out: Path) -> None:
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("command", choices=["tune", "test"])
+    p.add_argument("command", choices=["tune", "tune2", "test"])
     p.add_argument("--out", default="runs/pv-full")
     p.add_argument("--jobs", type=int, default=6)
     p.add_argument("--smoke", action="store_true", help="tiny slice, 60 rounds; no results")
     a = p.parse_args()
     if a.command == "tune":
         tune(Path(a.out), a.jobs, a.smoke)
+    elif a.command == "tune2":
+        tune2(Path(a.out), a.jobs, a.smoke)
     else:
         test(Path(a.out))
