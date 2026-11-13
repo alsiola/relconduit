@@ -88,6 +88,14 @@
       "issue": "16",
       "usd": 0.07,
       "priced": "entered"
+    },
+    {
+      "at": "2026-11-13T15:40:15+00:00",
+      "kind": "cloud",
+      "what": "relconduit-16-1a1d5829c90",
+      "issue": "16",
+      "usd": 0.08,
+      "priced": "entered"
     }
   ]
 }
