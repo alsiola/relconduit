@@ -16,6 +16,14 @@
         "hours": 0.044,
         "usdPerHour": 0.2595
       }
+    },
+    {
+      "at": "2026-11-13T00:47:01+00:00",
+      "kind": "cloud",
+      "what": "relconduit-6-1a1d1eaa2c1",
+      "issue": "6",
+      "usd": 0.65,
+      "priced": "entered"
     }
   ]
 }
