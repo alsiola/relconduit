@@ -42,7 +42,7 @@ with feature building under 30 s. Peak RSS 4.7 GB.
 | **test** | **.0714 ± .0001** | .0714 / .0716 / .0713 |
 
 Published (test):
-- official LightGBM .103 (our reproduction in `experiments/rel-amazon/baselines`);
+- official LightGBM .103 (our reproduction .102 ± .000);
 - GNN .085;
 - RT-J .072;
 - RT-PluRel .073;

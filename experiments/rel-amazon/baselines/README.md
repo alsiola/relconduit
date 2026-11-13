@@ -24,7 +24,7 @@ OMP_NUM_THREADS=2 uv run python lightgbm_entity.py --dataset rel-amazon --task u
 | Task | val | test | per seed (test) | official LightGBM (test) | runtime per seed | peak RSS | verdict |
 |---|---|---|---|---|---|---|---|
 | user-ltv | .2459 ± .0000 | .2919 ± .0000 | .2919 / .2919 / .2919 | .292 | 4.2 min | 46.3 GB | reproduces |
-| item-ltv | ITEM_VAL | ITEM_TEST | ITEM_SEEDS | .103 | ITEM_MIN | 46.3 GB | ITEM_VERDICT |
+| item-ltv | .0942 ± .0000 | .1024 ± .0001 | .1024 / .1025 / .1024 | .103 | 53.3 min | 46.3 GB | reproduces |
 
 On user-ltv the tuned model predicts close to the global median: .2919 is also the leaderboard's Global Median and
 Zero score. So the seeds agree to four decimals.
