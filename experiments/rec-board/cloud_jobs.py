@@ -12,7 +12,9 @@ Runs each job as its own process, side by side, on one 24-vCPU machine:
   upstream's script holds about 25 GB or more per rel-avito seed, and the first attempt at this
   run, with three rel-avito seeds beside the rankers, ran a 128 GB machine out of memory. Each
   upstream job also waits until ``--upstream-free-gb`` (rel-avito: ``--avito-free-gb``) of
-  memory is available before it starts.
+  memory is available before it starts. ``--upstream-parallel`` and ``--avito-parallel`` set how
+  many run at once (run 3, on a 192 GB machine after two Spot preemptions, ran all three
+  rel-avito seeds side by side).
 
 Each finished job leaves ``<out>/<job>/done.json`` (written last, by rename), so a restarted
 machine skips it; ranker jobs also keep finished fits in ``<out>/<job>/work`` and resume from
@@ -183,6 +185,15 @@ def main() -> None:
     p.add_argument("--upstream-threads", type=int, default=2)
     p.add_argument("--upstream-free-gb", type=float, default=25)
     p.add_argument("--avito-free-gb", type=float, default=60)
+    p.add_argument(
+        "--upstream-parallel", type=int, default=2, help="upstream jobs at once (not rel-avito)"
+    )
+    p.add_argument("--avito-parallel", type=int, default=1, help="rel-avito upstream seeds at once")
+    p.add_argument(
+        "--avito-threads",
+        type=int,
+        help="threads per rel-avito upstream seed (default: 2x upstream)",
+    )
     p.add_argument("--smoke-rows", type=int, default=150)
     p.add_argument("--only", nargs="*", help="run only jobs whose name contains one of these")
     p.add_argument("--heartbeat", type=float, default=5)
@@ -192,6 +203,7 @@ def main() -> None:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     pairs_root = Path(a.pairs_root)
+    avito_threads = a.avito_threads or 2 * a.upstream_threads
 
     def wanted(name: str) -> bool:
         return not a.only or any(s in name for s in a.only)
@@ -212,8 +224,8 @@ def main() -> None:
     with (
         ThreadPoolExecutor(len(TASKS)) as ranker_pool,
         ThreadPoolExecutor(2) as trivial_pool,
-        ThreadPoolExecutor(2) as upstream_pool,
-        ThreadPoolExecutor(1) as avito_pool,
+        ThreadPoolExecutor(a.upstream_parallel) as upstream_pool,
+        ThreadPoolExecutor(a.avito_parallel) as avito_pool,
     ):
         rankers = [
             ranker_pool.submit(ranker, d, t, out, pairs_root, a.ranker_threads)
@@ -236,7 +248,7 @@ def main() -> None:
         msgs = [f.result() for f in rankers]
         # rel-avito's upstream seeds: once the rankers have given their memory back.
         futs += [
-            avito_pool.submit(upstream_lgbm, d, t, s, out, 2 * a.upstream_threads, a.avito_free_gb)
+            avito_pool.submit(upstream_lgbm, d, t, s, out, avito_threads, a.avito_free_gb)
             for d, t in avito
             for s in SEEDS
             if wanted(f"lgbm_{d}_{t}_s{s}")
