@@ -26,6 +26,7 @@ import math
 import os
 import posixpath
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -35,6 +36,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from relconduit import costs
+from relconduit.results import git_commit
 
 ROOT = costs.ROOT
 POLL_SECONDS = 60
@@ -185,16 +187,22 @@ uv sync --all-extras --frozen
 echo setup done"""
 
 
-def start_script(command: str, save: str, checkpoint_minutes: int) -> str:
+def start_script(command: str, save: str, checkpoint_minutes: int, commit: str = "") -> str:
+    """The script that starts ``command`` detached on the machine.
+
+    ``commit`` is exported as ``RELCONDUIT_COMMIT``: the machine gets the checkout's files but
+    no ``.git``, so :func:`relconduit.results.git_commit` reads it from there.
+    """
     saver = (
         f"save() {{\n{save}\n}}\n( while sleep {checkpoint_minutes * 60}; do save; done ) &\nsaver=$!\n"
         if save
         else ""
     )
     finish = "kill $saver 2>/dev/null\nsave\n" if save else ""
+    export_commit = f"export RELCONDUIT_COMMIT={shlex.quote(commit)}\n" if commit else ""
     return f"""cat > ~/run.sh <<'RUN_EOF'
 export PATH="$HOME/.local/bin:$PATH"
-cd ~/repo
+{export_commit}cd ~/repo
 {saver}{command}
 code=$?
 {finish}echo $code > ~/run.exit
@@ -418,6 +426,7 @@ def run_once(plan: dict, name: str, hours: float) -> int | None:
                 plan["command"],
                 sync_lines(plan["checkpoints"], plan["prefix"], "save"),
                 cfg["checkpointMinutes"],
+                plan["commit"],
             ),
             echo=True,
         )
@@ -625,6 +634,7 @@ def main(argv: list[str] | None = None) -> int:
         "checkpoints": checkpoints,
         "prefix": prefix,
         "per_hour": per_hour,
+        "commit": git_commit(ROOT),
     }
     retries = a.retries if checkpoints else 0
     deadline = time.time() + a.hours * 3600

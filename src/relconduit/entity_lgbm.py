@@ -41,6 +41,7 @@ import numpy as np
 import pandas as pd
 from relbench.base import Database
 
+from relconduit.entity_encoding import EncodingConfig, EntityEncoder
 from relconduit.features import FeatureConfig, build_features, feature_vocab
 
 FEATURE_SETS = ("all", "no_hop2")
@@ -86,6 +87,10 @@ def select_columns(
         return [c for c in columns if ">" not in c]
     if feature_set == "no_hop2_all":
         return [c for c in columns if ">>" not in c]
+    if feature_set.startswith("drop:"):
+        # drop:<a>,<b>: every column whose name contains none of the substrings.
+        subs = feature_set[5:].split(",")
+        return [c for c in columns if not any(s in c for s in subs)]
     if feature_set.startswith("top") and feature_set[3:].isdigit():
         if ranking is None:
             raise ValueError(f"feature set {feature_set!r} needs a ranking")
@@ -195,6 +200,9 @@ def run(
     grid: Sequence[dict] | None = None,
     val_sample: int | None = None,
     db_transform: Callable[[Database], Database] | None = None,
+    encoding: EncodingConfig | None = None,
+    extra_feature_sets: Sequence[str] = (),
+    smoke_rows: int | None = None,
 ) -> dict:
     """Tune on val; with ``score_test``, then score test once with the chosen config.
 
@@ -205,8 +213,16 @@ def run(
     ``score_test`` the test table's labels are never read, so the grid and the features can be
     iterated on val. Val fits are cached in ``work_dir`` (see :func:`_tune`): delete
     ``tune.jsonl`` and ``ranking.json`` there after changing the features.
+
+    With ``encoding``, :class:`~relconduit.entity_encoding.EntityEncoder` columns (target
+    encoding over the train labels only) are added to every split, and ``extra_feature_sets``
+    (e.g. ``drop:enc__``) join the feature sets compared on val in stage 1.
+
+    ``smoke_rows`` is for smoke tests: train and val are cut to a random sample of that many
+    rows each, the grid to its first config, and test is never touched.
     """
     import relbench
+    from relbench.base import Table
     from relbench.submit import evaluate_task, write_prediction_table
 
     t0 = time.time()
@@ -228,6 +244,14 @@ def run(
         rng = np.random.default_rng(1)
         idx = np.sort(rng.choice(len(tables["val"].df), size=val_sample, replace=False))
         tables["val"].df = tables["val"].df.iloc[idx].reset_index(drop=True)
+    if smoke_rows:
+        if score_test:
+            raise ValueError("a smoke run never scores test")
+        for s in ("train", "val"):
+            t = tables[s]
+            n = min(smoke_rows, len(t.df))
+            df = t.df.sample(n=n, random_state=0).reset_index(drop=True)
+            tables[s] = Table(df, t.fkey_col_to_pkey_table, t.pkey_col, t.time_col)
     key = [task.entity_col, task.time_col]
 
     def get_db(upto_test_timestamp: bool):
@@ -241,14 +265,31 @@ def run(
 
     db_main = get_db(True)
     print(f"db loaded in {time.time() - t0:.0f}s", flush=True)
-    # One text vocabulary for every split, so all share one feature set and category codes.
+    # One text vocabulary for every split, so all share one feature set and category codes,
+    # read only from rows before the val timestamp (no value first seen in val or test).
     cfg = replace(feature_config or FeatureConfig())
     if cfg.vocab is None:
-        cfg.vocab = feature_vocab(db_main, cfg)
+        cfg.vocab = feature_vocab(db_main, cfg, before=ds.val_timestamp)
+
+    encoders: dict[int, EntityEncoder] = {}
 
     def features(db, split):
         df = tables[split].df
-        return build_features(db, df[key], task.entity_table, task.entity_col, task.time_col, cfg)
+        X = build_features(db, df[key], task.entity_table, task.entity_col, task.time_col, cfg)
+        if encoding is None:
+            return X
+        if id(db) not in encoders:
+            encoders[id(db)] = EntityEncoder(
+                db,
+                task.entity_table,
+                task.entity_col,
+                task.time_col,
+                encoding,
+                labels=tables["train"].df,
+                target=task.target_col,
+                horizon=task.timedelta,
+            )
+        return pd.concat([X, encoders[id(db)].transform(df[key])], axis=1)
 
     X_train, X_val = features(db_main, "train"), features(db_main, "val")
     y_train = tables["train"].df[task.target_col].to_numpy(dtype=float)
@@ -275,6 +316,7 @@ def run(
         sets = ["all", "no_hop2"]
         if any(">>" in c for c in X_train.columns):
             sets.append("no_hop2_all")
+        sets += list(extra_feature_sets)
         sets += [f"top{k}" for k in prune_top_k if k < X_train.shape[1]]
         stage1 = _tune(
             task, [ref | {"features": f} for f in sets], data, seeds, ranking, "[1] ", tune_cache
@@ -282,6 +324,8 @@ def run(
         chosen = pick(stage1, key=lambda r: r.mean).config["features"]
         print(f"feature set: {chosen}", flush=True)
         configs = [c | {"features": chosen} for c in configs if c["features"] == "all"]
+    if smoke_rows:
+        configs = configs[:1]
     results = _tune(task, configs, data, seeds, ranking, cache=tune_cache)
     best = pick(results, key=lambda r: r.mean)
     print(f"best: {best.config} val {best.mean:.4f}", flush=True)
@@ -314,7 +358,8 @@ def run(
     }
     if not score_test:
         summary["runtime_minutes"] = (time.time() - t0) / 60
-        (work / "summary_val.json").write_text(json.dumps(summary, indent=2))
+        name = "summary_smoke.json" if smoke_rows else "summary_val.json"
+        (work / name).write_text(json.dumps(summary, indent=2))
         return summary
 
     # --- score test once ----------------------------------------------------------------

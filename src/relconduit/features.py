@@ -149,9 +149,18 @@ def _nullable(table: Table, col: str) -> bool:
     return pd.api.types.is_float_dtype(table.df[col].dtype)
 
 
-def feature_vocab(db: Database, config: FeatureConfig | None = None) -> Vocab:
-    """Sorted distinct values of every text column with at most ``MAX_CATEGORIES`` of them."""
+def feature_vocab(
+    db: Database, config: FeatureConfig | None = None, before: pd.Timestamp | None = None
+) -> Vocab:
+    """Sorted distinct values of every text column with at most ``MAX_CATEGORIES`` of them.
+
+    With ``before`` (e.g. the val timestamp), only rows dated strictly before it are read (all
+    rows of static tables), so neither the codebook nor whether a column is kept can depend on
+    a value that first appears later.
+    """
     cfg = config or FeatureConfig()
+    if before is not None:
+        db = truncate_before(db, pd.Timestamp(before))
     vocab: Vocab = {}
     for name, t in db.table_dict.items():
         if name in set(cfg.exclude_tables):
