@@ -58,7 +58,7 @@ FEATURES = FeatureConfig(windows=(7, 28, 91, None), hop2=False)
 PLAN = BigPlan(
     link=LINK,
     grid=GRID,
-    train_rows=120_000,  # ~300 features: about 40k kept seeds, 6 GB of pairs
+    train_rows=150_000,  # ~300 features: about 50k kept seeds, 8 GB of pairs
     train_times=8,  # the last eight weekly seed times
     leader=("Kapso", 0.0325602),
 )
