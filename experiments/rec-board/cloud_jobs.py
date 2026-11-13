@@ -6,8 +6,13 @@ Runs each job as its own process, side by side, on one 24-vCPU machine:
   pair leakage check included), all at once. Nothing else starts unless all pass;
 * the six cand-lgbm-ranker runs (``--ranker-threads`` each), tuned on val, test scored once;
 * upstream's trivial baselines (past visit, global popularity; deterministic, one run each);
-* upstream's LightGBM recommendation baseline, seeds 42, 43, 44 (``--upstream-parallel`` at
-  a time, ``--upstream-threads`` each).
+* upstream's LightGBM recommendation baseline, seeds 42, 43, 44 (``--upstream-threads``
+  each), two at a time beside the rankers, and for rel-avito one at a time after every ranker
+  is done:
+  upstream's script holds about 25 GB or more per rel-avito seed, and the first attempt at this
+  run, with three rel-avito seeds beside the rankers, ran a 128 GB machine out of memory. Each
+  upstream job also waits until ``--upstream-free-gb`` (rel-avito: ``--avito-free-gb``) of
+  memory is available before it starts.
 
 Each finished job leaves ``<out>/<job>/done.json`` (written last, by rename), so a restarted
 machine skips it; ranker jobs also keep finished fits in ``<out>/<job>/work`` and resume from
@@ -115,8 +120,26 @@ def trivial(ds: str, task: str, out: Path) -> str:
     return run_job(name, cmd, out, 1, _summary_lines, cwd=UPSTREAM)
 
 
-def upstream_lgbm(ds: str, task: str, seed: int, out: Path, threads: int) -> str:
+def available_gb() -> float:
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        if line.startswith("MemAvailable:"):
+            return int(line.split()[1]) / 1e6
+    return float("inf")  # not Linux: no check
+
+
+def wait_for_memory(name: str, gb: float) -> None:
+    said = False
+    while available_gb() < gb:
+        if not said:
+            log(f"{name}: waiting for {gb:.0f} GB free (now {available_gb():.0f} GB)")
+            said = True
+        time.sleep(30)
+
+
+def upstream_lgbm(ds: str, task: str, seed: int, out: Path, threads: int, free_gb: float) -> str:
     name = f"lgbm_{ds}_{task}_s{seed}"
+    if not (out / name / "done.json").exists():
+        wait_for_memory(name, free_gb)
     cmd = [sys.executable, "lightgbm_recommendation.py", "--dataset", ds, "--task", task]
     cmd += ["--seed", str(seed), "--cache_dir", str(Path.home() / "bl_cache" / name)]
     cmd += ["--pred_dir", str((out / name / "pred").resolve())]
@@ -158,7 +181,8 @@ def main() -> None:
     p.add_argument("--pairs-root", default=str(Path.home() / "rc12pairs"))
     p.add_argument("--ranker-threads", type=int, default=4)
     p.add_argument("--upstream-threads", type=int, default=2)
-    p.add_argument("--upstream-parallel", type=int, default=3)
+    p.add_argument("--upstream-free-gb", type=float, default=25)
+    p.add_argument("--avito-free-gb", type=float, default=60)
     p.add_argument("--smoke-rows", type=int, default=150)
     p.add_argument("--only", nargs="*", help="run only jobs whose name contains one of these")
     p.add_argument("--heartbeat", type=float, default=5)
@@ -188,23 +212,38 @@ def main() -> None:
     with (
         ThreadPoolExecutor(len(TASKS)) as ranker_pool,
         ThreadPoolExecutor(2) as trivial_pool,
-        ThreadPoolExecutor(a.upstream_parallel) as upstream_pool,
+        ThreadPoolExecutor(2) as upstream_pool,
+        ThreadPoolExecutor(1) as avito_pool,
     ):
-        futs = [
+        rankers = [
             ranker_pool.submit(ranker, d, t, out, pairs_root, a.ranker_threads)
             for d, t in TASKS
             if wanted(f"ranker_{d}_{t}")
         ]
-        futs += [
+        futs = [
             trivial_pool.submit(trivial, d, t, out) for d, t in TASKS if wanted(f"trivial_{d}_{t}")
         ]
+        avito = [(d, t) for d, t in TASKS if d == "rel-avito"]
         futs += [
-            upstream_pool.submit(upstream_lgbm, d, t, s, out, a.upstream_threads)
+            upstream_pool.submit(
+                upstream_lgbm, d, t, s, out, a.upstream_threads, a.upstream_free_gb
+            )
             for d, t in TASKS
+            if (d, t) not in avito
             for s in SEEDS
             if wanted(f"lgbm_{d}_{t}_s{s}")
         ]
-        msgs = [f.result() for f in futs]
+        msgs = [f.result() for f in rankers]
+        # rel-avito's upstream seeds: once the rankers have given their memory back.
+        futs += [
+            avito_pool.submit(
+                upstream_lgbm, d, t, s, out, 2 * a.upstream_threads, a.avito_free_gb
+            )
+            for d, t in avito
+            for s in SEEDS
+            if wanted(f"lgbm_{d}_{t}_s{s}")
+        ]
+        msgs += [f.result() for f in futs]
     stop.set()
     print("\n".join(msgs), flush=True)
     (out / "done.json").write_text(json.dumps({"jobs": msgs}, indent=2))
