@@ -14,6 +14,12 @@ The protocol, in :func:`run`:
    val features are the same under both: every row before a train or val seed time is before
    the test timestamp.
 
+With ``train_sample``, step 1 uses a fixed uniform sample of that many train rows (drawn with
+``numpy.random.default_rng(0)``, the same for every seed and config), as upstream's LightGBM
+baseline does with 50,000. With ``slim_db``, the databases come from
+:func:`relconduit.db.load_task_db` (the parquet files without free text) instead of
+``task.get_db``: same rows and the same features, a fraction of the memory.
+
 With ``prune_top_k``, step 2 runs in two stages instead, for wide feature tables. Stage 1 ranks
 the features by total gain of one reference fit (seed 0, :data:`REF_CONFIG`, early stopping on
 val), then scores each candidate feature set (``all``, ``no_hop2``, ``no_hop2_all`` when there
@@ -26,13 +32,14 @@ from __future__ import annotations
 import itertools
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+from relbench.base import Database
 
 from relconduit.features import FeatureConfig, build_features, feature_vocab
 
@@ -132,15 +139,34 @@ def _score(task, pred: np.ndarray, table) -> float:
     return float(value)
 
 
-def _tune(task, configs, data, seeds, ranking=None, label=""):
+def _tune(task, configs, data, seeds, ranking=None, label="", cache: Path | None = None):
+    """Fit every config for every seed and score it on val.
+
+    With ``cache`` (a JSON-lines file), each finished config is appended to it and configs
+    already there are not fitted again, so a restarted run resumes where it stopped.
+    """
     X_train, y_train, X_val, y_val, val_table = data
+    done = {}
+    if cache is not None and cache.exists():
+        for line in cache.read_text().splitlines():
+            if line.strip():
+                row = json.loads(line)
+                done[row["key"]] = row
     out: list[TuneResult] = []
     for config in configs:
-        scores, iters = [], []
-        for seed in seeds:
-            model = fit(X_train, y_train, X_val, y_val, config, seed, ranking)
-            scores.append(_score(task, predict(model, X_val), val_table))
-            iters.append(model.best_iteration)
+        key = label + json.dumps({"config": config, "seeds": list(seeds)}, sort_keys=True)
+        if key in done:
+            scores, iters = done[key]["val_scores"], done[key]["best_iterations"]
+        else:
+            scores, iters = [], []
+            for seed in seeds:
+                model = fit(X_train, y_train, X_val, y_val, config, seed, ranking)
+                scores.append(_score(task, predict(model, X_val), val_table))
+                iters.append(model.best_iteration)
+            if cache is not None:
+                row = {"key": key, "val_scores": scores, "best_iterations": iters}
+                with open(cache, "a") as f:
+                    f.write(json.dumps(row) + "\n")
         out.append(TuneResult(config, scores, iters))
         sd = np.std(scores, ddof=1) if len(scores) > 1 else 0.0
         print(f"  {label}{config} val {np.mean(scores):.4f} ± {sd:.4f}", flush=True)
@@ -164,11 +190,21 @@ def run(
     score_test: bool = False,
     prune_top_k: Sequence[int] = (),
     full_db_variant: bool = True,
+    train_sample: int | None = None,
+    slim_db: bool = False,
+    grid: Sequence[dict] | None = None,
+    val_sample: int | None = None,
+    db_transform: Callable[[Database], Database] | None = None,
 ) -> dict:
     """Tune on val; with ``score_test``, then score test once with the chosen config.
 
-    Returns a summary dict (also written to ``work_dir``). Without ``score_test`` the test
-    table's labels are never read, so the grid and the features can be iterated on val.
+    ``db_transform`` is applied to every database loaded (it must work row by row, e.g. a
+    dtype change, or it could leak). ``val_sample`` subsamples val like ``train_sample``: for
+    smoke tests only, never for a reported number. ``grid`` replaces :func:`grid_configs` (each config needs ``features``, used only without
+    ``prune_top_k``). Returns a summary dict (also written to ``work_dir``). Without
+    ``score_test`` the test table's labels are never read, so the grid and the features can be
+    iterated on val. Val fits are cached in ``work_dir`` (see :func:`_tune`): delete
+    ``tune.jsonl`` and ``ranking.json`` there after changing the features.
     """
     import relbench
     from relbench.submit import evaluate_task, write_prediction_table
@@ -183,8 +219,28 @@ def run(
     work.mkdir(parents=True, exist_ok=True)
 
     tables = {s: task.get_table(s) for s in ("train", "val", "test")}
+    n_train_full = len(tables["train"].df)
+    if train_sample is not None and train_sample < n_train_full:
+        rng = np.random.default_rng(0)
+        idx = np.sort(rng.choice(n_train_full, size=train_sample, replace=False))
+        tables["train"].df = tables["train"].df.iloc[idx].reset_index(drop=True)
+    if val_sample is not None and val_sample < len(tables["val"].df):
+        rng = np.random.default_rng(1)
+        idx = np.sort(rng.choice(len(tables["val"].df), size=val_sample, replace=False))
+        tables["val"].df = tables["val"].df.iloc[idx].reset_index(drop=True)
     key = [task.entity_col, task.time_col]
-    db_main = task.get_db(upto_test_timestamp=True)
+
+    def get_db(upto_test_timestamp: bool):
+        if slim_db:
+            from relconduit.db import load_task_db
+
+            db = load_task_db(task, upto_test_timestamp=upto_test_timestamp)
+        else:
+            db = task.get_db(upto_test_timestamp=upto_test_timestamp)
+        return db if db_transform is None else db_transform(db)
+
+    db_main = get_db(True)
+    print(f"db loaded in {time.time() - t0:.0f}s", flush=True)
     # One text vocabulary for every split, so all share one feature set and category codes.
     cfg = replace(feature_config or FeatureConfig())
     if cfg.vocab is None:
@@ -200,23 +256,33 @@ def run(
     t_feat = time.time() - t0
     print(f"features: train {X_train.shape}, val {X_val.shape} in {t_feat:.0f}s", flush=True)
     data = (X_train, y_train, X_val, y_val, tables["val"])
+    # Finished fits survive a restart (a Spot machine taken back): see _tune.
+    tune_cache = work / "tune.jsonl"
 
     # --- tune on val ------------------------------------------------------------------
     ranking, stage1 = None, []
-    configs = grid_configs(task_type)
+    configs = list(grid) if grid is not None else grid_configs(task_type)
     if prune_top_k:
         objective = "regression_l1" if task_type == "regression" else "binary"
         ref = {**REF_CONFIG, "objective": objective}
-        ranking = gain_ranking(fit(X_train, y_train, X_val, y_val, ref | {"features": "all"}, 0))
+        ranking_path = work / "ranking.json"
+        if ranking_path.exists():
+            ranking = json.loads(ranking_path.read_text())
+        else:
+            ref_all = ref | {"features": "all"}
+            ranking = gain_ranking(fit(X_train, y_train, X_val, y_val, ref_all, 0))
+            ranking_path.write_text(json.dumps(ranking))
         sets = ["all", "no_hop2"]
         if any(">>" in c for c in X_train.columns):
             sets.append("no_hop2_all")
         sets += [f"top{k}" for k in prune_top_k if k < X_train.shape[1]]
-        stage1 = _tune(task, [ref | {"features": f} for f in sets], data, seeds, ranking, "[1] ")
+        stage1 = _tune(
+            task, [ref | {"features": f} for f in sets], data, seeds, ranking, "[1] ", tune_cache
+        )
         chosen = pick(stage1, key=lambda r: r.mean).config["features"]
         print(f"feature set: {chosen}", flush=True)
         configs = [c | {"features": chosen} for c in configs if c["features"] == "all"]
-    results = _tune(task, configs, data, seeds, ranking)
+    results = _tune(task, configs, data, seeds, ranking, cache=tune_cache)
     best = pick(results, key=lambda r: r.mean)
     print(f"best: {best.config} val {best.mean:.4f}", flush=True)
 
@@ -233,6 +299,8 @@ def run(
         "approach": approach,
         "metric": task.metrics[0].__name__,
         "seeds": list(seeds),
+        "n_train_rows": len(X_train),
+        "n_train_rows_full": n_train_full,
         "n_features": X_train.shape[1],
         "n_features_selected": len(selected),
         "best_config": best.config,
@@ -252,7 +320,7 @@ def run(
     # --- score test once ----------------------------------------------------------------
     X_test = {"upto_test_timestamp=True": features(db_main, "test")}
     if full_db_variant:
-        db_full = task.get_db(upto_test_timestamp=False)
+        db_full = get_db(False)
         X_test["upto_test_timestamp=False"] = features(db_full, "test")
     test_scores: dict[str, list[float]] = {v: [] for v in X_test}
     for seed in seeds:

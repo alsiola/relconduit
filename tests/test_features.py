@@ -486,3 +486,36 @@ def test_planted_leak_is_caught_on_rel_event(event):
     assert set(range(6, 9)) <= rows  # every seed at a user's own sign-up time
     assert any(c.startswith("users__") for c in cols)  # through the entity's own columns
     assert any(c.startswith("event_attendees__") for c in cols)
+
+
+# --- options added for the big tasks (issue 8) ------------------------------------------------
+
+
+def test_sum_aggregate_hop1_and_rollup():
+    cfg = FeatureConfig(windows=(90, None), aggs=("mean", "sum"))
+    X = feats(cfg=cfg).loc[10]  # user 0 at 2020-06-01: events 0, 1, 2 (points 10, 20, 30)
+    assert X["events__points__sum__all"] == 60
+    assert X["events__points__sum__90d"] == 30
+    assert X["events__value__sum__all"] == pytest.approx(4.0)  # NaN ignored
+    assert "events__points__min__all" not in X
+    # Pooled (hop 2 over all memberships): the sum over every linked parent's rows.
+    T = timed_feats(cfg=replace(TIMED_CFG, aggs=("sum",)))
+    col = "friends.friend>>events__value__sum__all"
+    # user 0 at 2020-04-01: friends 1 and 2; their events before then: 3.0 (user 1), 6.0
+    # (user 2; user 2's 01-20 value is NaN).
+    assert T.loc[20, col] == pytest.approx(9.0)
+
+
+def test_sum_has_no_leak_and_the_planted_leak_is_caught():
+    cfg = FeatureConfig(windows=CFG.windows, aggs=("mean", "min", "max", "sum"))
+    assert leakage_mismatches(tiny_db(), SEEDS, "users", "user_id", "time", cfg) == []
+    leaky = replace(cfg, _inclusive=True)
+    assert leakage_mismatches(tiny_db(), SEEDS, "users", "user_id", "time", leaky)
+
+
+def test_max_count_categories():
+    few = timed_feats(cfg=replace(TIMED_CFG, max_count_categories=2))
+    many = timed_feats()
+    assert not any("events__status=" in c for c in few.columns)
+    assert any("events__status=" in c for c in many.columns)
+    assert "events__status__last" in few  # the last value is kept either way
