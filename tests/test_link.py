@@ -256,3 +256,16 @@ def test_unknown_src_walks_nowhere():
     p = build_pairs(tiny_db(), seeds, "user_id", "time", config())
     assert (p.loc[p[SEED] == 0, "covisit__score"] == 0).all()  # only popular candidates
     assert (p.loc[p[SEED] == 1, "covisit__score"] > 0).any()
+
+
+def test_keep_top_per_row_breaks_ties_by_lower_column():
+    import scipy.sparse as sp
+
+    from relconduit.link import _keep_top_per_row
+
+    m = sp.csr_matrix(
+        np.array([[0.5, 0.2, 0.5, 0.0, 0.5], [0.1, 0.0, 0.0, 0.0, 0.0], [0.3, 0.3, 0.3, 0.9, 0.0]])
+    )
+    got = _keep_top_per_row(m, 2).toarray()
+    want = np.array([[0.5, 0, 0.5, 0, 0], [0.1, 0, 0, 0, 0], [0.3, 0, 0, 0.9, 0]])
+    np.testing.assert_array_equal(got, want)

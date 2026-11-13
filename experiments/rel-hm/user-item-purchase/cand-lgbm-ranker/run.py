@@ -40,7 +40,7 @@ LINK = LinkConfig(
     n_direct=30,  # repurchases
     paths={
         # Articles bought by customers who bought the same articles, the last weeks up.
-        "covisit": Path(("buy", "~buy", "buy"), n=50, half_life_days=14, max_fanout=300),
+        "covisit": Path(("buy", "~buy", "buy"), n=50, half_life_days=14, max_fanout=300, beam=500),
         # Other colours / sizes of the products the customer bought, bought in the last 7 days.
         "product": Path(
             ("buy", "art_prod", "prod_buys"), n=30, half_life_days=60, window_days=(None, None, 7)

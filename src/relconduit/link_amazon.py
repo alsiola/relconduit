@@ -124,7 +124,7 @@ def link_config(task_name: str) -> LinkConfig:
         paths={
             # Products reviewed by customers who reviewed the same products, recent ones up.
             "covisit": Path(
-                ("review", "~review", "review"), n=100, half_life_days=365, max_fanout=300
+                ("review", "~review", "review"), n=100, half_life_days=365, max_fanout=300, beam=500
             ),
             # Other books by the authors (brands) the customer reviewed, popular in the last year.
             "brand": Path(

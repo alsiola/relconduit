@@ -172,18 +172,27 @@ def _row_normalise(m: sp.csr_matrix) -> sp.csr_matrix:
 
 
 def _keep_top_per_row(m: sp.csr_matrix, k: int) -> sp.csr_matrix:
-    """Each row's ``k`` largest entries (ties: lower column, i.e. lower node value, first)."""
+    """Each row's ``k`` largest entries (ties: lower column, i.e. lower node value, first).
+
+    Values are compared rounded to 12 decimals, so float noise never decides a tie. Only rows
+    longer than ``k`` are cut, each with a partition (linear) rather than a full sort."""
     m = m.tocsr()
-    m.sum_duplicates()
+    m.sum_duplicates()  # also sorts each row's columns
     lengths = np.diff(m.indptr)
     if lengths.max(initial=0) <= k:
         return m
-    rows = np.repeat(np.arange(m.shape[0]), lengths)
-    order = np.lexsort((m.indices, -np.round(m.data, 12), rows))
-    rank = np.empty_like(order)
-    rank[order] = np.arange(len(order)) - np.repeat(m.indptr[:-1], lengths)[order]
-    keep = rank < k
-    return sp.csr_matrix((m.data[keep], (rows[keep], m.indices[keep])), shape=m.shape).tocsr()
+    keep = np.ones(m.nnz, dtype=bool)
+    vals = np.round(m.data, 12)
+    for r in np.flatnonzero(lengths > k):
+        a, b = m.indptr[r], m.indptr[r + 1]
+        v = vals[a:b]
+        thr = np.partition(v, len(v) - k)[len(v) - k]  # the k-th largest value
+        sel = v > thr
+        ties = np.flatnonzero(v == thr)  # in column order
+        sel[ties[: k - int(sel.sum())]] = True
+        keep[a:b] = sel
+    indptr = np.concatenate([[0], np.cumsum(np.add.reduceat(keep, m.indptr[:-1]) * (lengths > 0))])
+    return sp.csr_matrix((m.data[keep], m.indices[keep], indptr), shape=m.shape)
 
 
 def _node_index(arrays) -> pd.Index:
