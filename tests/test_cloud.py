@@ -90,3 +90,13 @@ def test_spot_price():
 
 def test_spent_ignores_unpriced():
     assert costs.spent({"entries": [{"usd": 1.234}, {"usd": None}, {"usd": 2}]}) == 3.23
+
+
+def test_start_script_exports_commit():
+    # The machine has no .git, so the run's results rows get the commit from the environment.
+    script = cloud.start_script(
+        "uv run python x.py", save="", checkpoint_minutes=10, commit="abc1234"
+    )
+    assert "export RELCONDUIT_COMMIT=abc1234\n" in script
+    assert script.index("RELCONDUIT_COMMIT") < script.index("uv run python x.py")
+    assert "RELCONDUIT_COMMIT" not in cloud.start_script("x", save="", checkpoint_minutes=10)
