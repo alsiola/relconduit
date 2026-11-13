@@ -176,7 +176,7 @@ def setup_script(gpu: bool) -> str:
     return f"""set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq
-sudo apt-get install -y -qq curl ca-certificates git >/dev/null
+sudo apt-get install -y -qq curl ca-certificates git libgomp1 >/dev/null
 {check_gpu}curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null
 export PATH="$HOME/.local/bin:$PATH"
 mkdir -p ~/repo && tar xzf ~/repo.tgz -C ~/repo && rm ~/repo.tgz

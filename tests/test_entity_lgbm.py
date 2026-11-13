@@ -4,7 +4,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from relconduit.entity_lgbm import fit, grid_configs, predict, records, select_columns
+from relconduit.entity_lgbm import (
+    fit,
+    gain_ranking,
+    grid_configs,
+    predict,
+    records,
+    select_columns,
+)
 from relconduit.results import append_record, make_record
 
 
@@ -22,6 +29,26 @@ def test_select_columns():
     assert select_columns(cols, "no_hop2") == cols[:2]
     with pytest.raises(ValueError):
         select_columns(cols, "nope")
+
+
+def test_select_columns_pruned_sets():
+    cols = ["a", "t.fk>u__x", "t.fk>>u__y", "b"]
+    assert select_columns(cols, "no_hop2_all") == ["a", "t.fk>u__x", "b"]
+    assert select_columns(cols, "top2", ranking=["b", "t.fk>>u__y", "a"]) == ["t.fk>>u__y", "b"]
+    with pytest.raises(ValueError):
+        select_columns(cols, "top2")
+
+
+def test_gain_ranking_puts_the_signal_first():
+    rng = np.random.default_rng(0)
+    n = 800
+    X = pd.DataFrame({"noise": rng.normal(size=n), "signal": rng.normal(size=n)})
+    y = X["signal"].to_numpy() * 3 + 0.1 * rng.normal(size=n)
+    cfg = grid_configs("regression")[0] | {"features": "all"}
+    model = fit(X[:600], y[:600], X[600:], y[600:], cfg, seed=0)
+    assert gain_ranking(model)[0] == "signal"
+    pruned = fit(X[:600], y[:600], X[600:], y[600:], cfg | {"features": "top1"}, 0, ["signal"])
+    assert pruned.feature_name() == ["signal"]
 
 
 def test_fit_predict_binary_learns_signal():

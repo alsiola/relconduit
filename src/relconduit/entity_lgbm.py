@@ -9,9 +9,16 @@ The protocol, in :func:`run`:
    feature set (with or without hop-2 paths), so feature selection is decided on val too.
 3. Only then, score test once with the chosen config, for each seed, through the official
    path (:func:`relbench.submit.write_prediction_table` + ``evaluate_task``): with test
-   features from ``get_db(upto_test_timestamp=True)`` (main result) and from
-   ``get_db(upto_test_timestamp=False)`` (separate row). Train and val features are the
-   same under both: every row before a train or val seed time is before the test timestamp.
+   features from ``get_db(upto_test_timestamp=True)`` (main result) and, with
+   ``full_db_variant``, from ``get_db(upto_test_timestamp=False)`` (separate row). Train and
+   val features are the same under both: every row before a train or val seed time is before
+   the test timestamp.
+
+With ``prune_top_k``, step 2 runs in two stages instead, for wide feature tables. Stage 1 ranks
+the features by total gain of one reference fit (seed 0, :data:`REF_CONFIG`, early stopping on
+val), then scores each candidate feature set (``all``, ``no_hop2``, ``no_hop2_all`` when there
+are ``>>`` features, and the top ``k`` by gain) with the reference config over every seed, and
+keeps the best on val. Stage 2 searches the hyperparameter grid on that feature set.
 """
 
 from __future__ import annotations
@@ -20,14 +27,14 @@ import itertools
 import json
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from relconduit.features import FeatureConfig, build_features
+from relconduit.features import FeatureConfig, build_features, feature_vocab
 
 FEATURE_SETS = ("all", "no_hop2")
 
@@ -46,6 +53,7 @@ GRID = {
     "features": list(FEATURE_SETS),
 }
 REGRESSION_OBJECTIVES = ["regression", "regression_l1"]
+REF_CONFIG = {"num_leaves": 31, "min_child_samples": 50, "feature_fraction": 0.5}
 MAX_ROUNDS = 3000
 EARLY_STOPPING = 100
 
@@ -61,11 +69,21 @@ def grid_configs(task_type: str) -> list[dict]:
     return [dict(zip(keys, vals)) for vals in itertools.product(*(grid[k] for k in keys))]
 
 
-def select_columns(columns: Sequence[str], feature_set: str) -> list[str]:
+def select_columns(
+    columns: Sequence[str], feature_set: str, ranking: Sequence[str] | None = None
+) -> list[str]:
+    """The columns of a named feature set; ``top<k>`` needs ``ranking`` (best first)."""
     if feature_set == "all":
         return list(columns)
     if feature_set == "no_hop2":
         return [c for c in columns if ">" not in c]
+    if feature_set == "no_hop2_all":
+        return [c for c in columns if ">>" not in c]
+    if feature_set.startswith("top") and feature_set[3:].isdigit():
+        if ranking is None:
+            raise ValueError(f"feature set {feature_set!r} needs a ranking")
+        keep = set(ranking[: int(feature_set[3:])])
+        return [c for c in columns if c in keep]
     raise ValueError(f"unknown feature set {feature_set!r}")
 
 
@@ -76,10 +94,11 @@ def fit(
     y_val: np.ndarray,
     config: dict,
     seed: int,
+    ranking: Sequence[str] | None = None,
 ) -> lgb.Booster:
     """Fit one model; ``X_val`` is used for early stopping only."""
     cfg = dict(config)
-    cols = select_columns(X_train.columns, cfg.pop("features"))
+    cols = select_columns(X_train.columns, cfg.pop("features"), ranking)
     metric = "auc" if cfg["objective"] == "binary" else "l1"
     params = {**BASE_PARAMS, **cfg, "metric": metric, "seed": seed, "deterministic": True}
     dtrain = lgb.Dataset(X_train[cols], y_train, free_raw_data=False)
@@ -113,6 +132,28 @@ def _score(task, pred: np.ndarray, table) -> float:
     return float(value)
 
 
+def _tune(task, configs, data, seeds, ranking=None, label=""):
+    X_train, y_train, X_val, y_val, val_table = data
+    out: list[TuneResult] = []
+    for config in configs:
+        scores, iters = [], []
+        for seed in seeds:
+            model = fit(X_train, y_train, X_val, y_val, config, seed, ranking)
+            scores.append(_score(task, predict(model, X_val), val_table))
+            iters.append(model.best_iteration)
+        out.append(TuneResult(config, scores, iters))
+        sd = np.std(scores, ddof=1) if len(scores) > 1 else 0.0
+        print(f"  {label}{config} val {np.mean(scores):.4f} ± {sd:.4f}", flush=True)
+    return out
+
+
+def gain_ranking(model: lgb.Booster) -> list[str]:
+    """Feature names by total split gain, best first (ties by name, for determinism)."""
+    gain = model.feature_importance(importance_type="gain")
+    pairs = sorted(zip(model.feature_name(), gain), key=lambda p: (-p[1], p[0]))
+    return [name for name, _ in pairs]
+
+
 def run(
     dataset_name: str,
     task_name: str,
@@ -121,6 +162,8 @@ def run(
     work_dir: str | Path = "runs",
     feature_config: FeatureConfig | None = None,
     score_test: bool = False,
+    prune_top_k: Sequence[int] = (),
+    full_db_variant: bool = True,
 ) -> dict:
     """Tune on val; with ``score_test``, then score test once with the chosen config.
 
@@ -135,38 +178,55 @@ def run(
     task = ds.load_task(task_name)
     task_type = task.task_type.value
     higher_is_better = task_type != "regression"
+    pick = max if higher_is_better else min
     work = Path(work_dir) / dataset_name / task_name / "dfs-lightgbm"
     work.mkdir(parents=True, exist_ok=True)
 
     tables = {s: task.get_table(s) for s in ("train", "val", "test")}
     key = [task.entity_col, task.time_col]
+    db_main = task.get_db(upto_test_timestamp=True)
+    # One text vocabulary for every split, so all share one feature set and category codes.
+    cfg = replace(feature_config or FeatureConfig())
+    if cfg.vocab is None:
+        cfg.vocab = feature_vocab(db_main, cfg)
 
     def features(db, split):
         df = tables[split].df
-        return build_features(
-            db, df[key], task.entity_table, task.entity_col, task.time_col, feature_config
-        )
+        return build_features(db, df[key], task.entity_table, task.entity_col, task.time_col, cfg)
 
-    db_main = task.get_db(upto_test_timestamp=True)
     X_train, X_val = features(db_main, "train"), features(db_main, "val")
     y_train = tables["train"].df[task.target_col].to_numpy(dtype=float)
     y_val = tables["val"].df[task.target_col].to_numpy(dtype=float)
     t_feat = time.time() - t0
     print(f"features: train {X_train.shape}, val {X_val.shape} in {t_feat:.0f}s", flush=True)
+    data = (X_train, y_train, X_val, y_val, tables["val"])
 
     # --- tune on val ------------------------------------------------------------------
-    results: list[TuneResult] = []
-    for config in grid_configs(task_type):
-        scores, iters = [], []
-        for seed in seeds:
-            model = fit(X_train, y_train, X_val, y_val, config, seed)
-            scores.append(_score(task, predict(model, X_val), tables["val"]))
-            iters.append(model.best_iteration)
-        results.append(TuneResult(config, scores, iters))
-        print(f"  {config} val {np.mean(scores):.4f} ± {np.std(scores, ddof=1):.4f}", flush=True)
-    best = (max if higher_is_better else min)(results, key=lambda r: r.mean)
+    ranking, stage1 = None, []
+    configs = grid_configs(task_type)
+    if prune_top_k:
+        objective = "regression_l1" if task_type == "regression" else "binary"
+        ref = {**REF_CONFIG, "objective": objective}
+        ranking = gain_ranking(fit(X_train, y_train, X_val, y_val, ref | {"features": "all"}, 0))
+        sets = ["all", "no_hop2"]
+        if any(">>" in c for c in X_train.columns):
+            sets.append("no_hop2_all")
+        sets += [f"top{k}" for k in prune_top_k if k < X_train.shape[1]]
+        stage1 = _tune(task, [ref | {"features": f} for f in sets], data, seeds, ranking, "[1] ")
+        chosen = pick(stage1, key=lambda r: r.mean).config["features"]
+        print(f"feature set: {chosen}", flush=True)
+        configs = [c | {"features": chosen} for c in configs if c["features"] == "all"]
+    results = _tune(task, configs, data, seeds, ranking)
+    best = pick(results, key=lambda r: r.mean)
     print(f"best: {best.config} val {best.mean:.4f}", flush=True)
 
+    def _grid(rs):
+        return [
+            {"config": r.config, "val_scores": r.val_scores, "best_iterations": r.best_iterations}
+            for r in rs
+        ]
+
+    selected = select_columns(X_train.columns, best.config["features"], ranking)
     summary = {
         "dataset": dataset_name,
         "task": task_name,
@@ -174,15 +234,14 @@ def run(
         "metric": task.metrics[0].__name__,
         "seeds": list(seeds),
         "n_features": X_train.shape[1],
-        "n_features_selected": len(select_columns(X_train.columns, best.config["features"])),
+        "n_features_selected": len(selected),
         "best_config": best.config,
         "best_iterations": best.best_iterations,
         "val_scores": best.val_scores,
         "test_scores": None,
-        "grid": [
-            {"config": r.config, "val_scores": r.val_scores, "best_iterations": r.best_iterations}
-            for r in results
-        ],
+        "feature_sets": _grid(stage1),
+        "grid": _grid(results),
+        "top_features": (ranking or [])[:50],
         "feature_minutes": t_feat / 60,
     }
     if not score_test:
@@ -191,13 +250,13 @@ def run(
         return summary
 
     # --- score test once ----------------------------------------------------------------
-    X_test = {
-        "upto_test_timestamp=True": features(db_main, "test"),
-        "upto_test_timestamp=False": features(task.get_db(upto_test_timestamp=False), "test"),
-    }
+    X_test = {"upto_test_timestamp=True": features(db_main, "test")}
+    if full_db_variant:
+        db_full = task.get_db(upto_test_timestamp=False)
+        X_test["upto_test_timestamp=False"] = features(db_full, "test")
     test_scores: dict[str, list[float]] = {v: [] for v in X_test}
     for seed in seeds:
-        model = fit(X_train, y_train, X_val, y_val, best.config, seed)
+        model = fit(X_train, y_train, X_val, y_val, best.config, seed, ranking)
         for variant, X in X_test.items():
             tag = "upto_test" if variant.endswith("True") else "full_db"
             path = work / "pred" / tag / f"seed{seed}" / f"{dataset_name}__{task_name}.csv"

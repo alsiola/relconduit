@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -23,7 +24,13 @@ REQUIRED = (
 
 
 def git_commit(cwd: str | Path | None = None) -> str:
-    """The current commit's short SHA, with ``-dirty`` if the tree has uncommitted changes."""
+    """The current commit's short SHA, with ``-dirty`` if the tree has uncommitted changes.
+
+    ``RELCONDUIT_COMMIT`` overrides it: a cloud machine gets the checkout's files but no
+    ``.git``, so the launcher passes the commit it was started from.
+    """
+    if os.environ.get("RELCONDUIT_COMMIT"):
+        return os.environ["RELCONDUIT_COMMIT"]
     sha = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=cwd, capture_output=True, text=True, check=True
     ).stdout.strip()

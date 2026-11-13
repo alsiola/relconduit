@@ -65,6 +65,19 @@ A run outlives your turn, so start it with `claude-code.task.start` and park on 
 - Write bulky outputs under `runs/` (ignored by git) and bring back only what you'll commit or read.
 - The machine's full log lands in `.local/cloud/<machine>/run.log`, and the task log has the live copy.
 
+### Confirm it runs before you park
+
+"started" only means the command was launched. It doesn't mean any job works. Before ending the turn on a run:
+
+- Smoke-test new code on the target first: the first part of a run, or a `--dry-run`-sized slice, on the machine
+  image. The Mac is not a Debian VM: system libraries differ (LightGBM needs `libgomp1`, for one).
+- Make each job say when it starts, and when it fails, in the log that `cloud-run` echoes. A driver that only
+  prints at the end hides failures.
+- Once it starts, ssh in (`gcloud compute ssh <machine> --zone=... --project=oddsworth`, signed in with
+  `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=~/.config/oddsworth/gcp-mac-runner.json`) and read each job's own log.
+  Check every job has done real work (features built, first fit scored, no `Traceback`), and look again partway
+  through a long run. In issue 6, three of eight jobs died at import in seconds and went unnoticed for 90 paid minutes.
+
 ## Checkpoints
 
 Google can take a Spot machine back at any time, so build every run of more than an hour to resume, and checkpoint it. Being taken back five hours into a six-hour run should cost minutes, not hours.
