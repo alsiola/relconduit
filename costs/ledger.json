@@ -112,6 +112,14 @@
       "issue": "21",
       "usd": 0.05,
       "priced": "entered"
+    },
+    {
+      "at": "2026-11-13T22:14:09+00:00",
+      "kind": "cloud",
+      "what": "relconduit-21-1a1d6d86a0b (0.60 h, stopped: pair building too slow, see issue 21)",
+      "issue": "21",
+      "usd": 0.25,
+      "priced": "entered"
     }
   ]
 }
