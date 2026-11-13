@@ -40,6 +40,46 @@
       "issue": "9",
       "usd": 0.11,
       "priced": "entered"
+    },
+    {
+      "at": "2026-11-13T06:14:22+00:00",
+      "kind": "cloud",
+      "what": "relconduit-12-1a1d35d6184",
+      "issue": "12",
+      "usd": 0.31,
+      "priced": "entered"
+    },
+    {
+      "at": "2026-11-13T08:35:53+00:00",
+      "kind": "cloud",
+      "what": "relconduit-12-1a1d38cc0aa (2.33 h, preempted)",
+      "issue": "12",
+      "usd": 0.89,
+      "priced": "entered"
+    },
+    {
+      "at": "2026-11-13T08:47:37+00:00",
+      "kind": "cloud",
+      "what": "relconduit-12-1a1d40f8033 (0.14 h, preempted)",
+      "issue": "12",
+      "usd": 0.05,
+      "priced": "entered"
+    },
+    {
+      "at": "2026-11-13T09:23:37+00:00",
+      "kind": "cloud",
+      "what": "relconduit-12-1a1d41a438e (0.55 h, stopped)",
+      "issue": "12",
+      "usd": 0.21,
+      "priced": "entered"
+    },
+    {
+      "at": "2026-11-13T14:42:11+00:00",
+      "kind": "cloud",
+      "what": "relconduit-12-1a1d43a64ca",
+      "issue": "12",
+      "usd": 2.42,
+      "priced": "entered"
     }
   ]
 }
