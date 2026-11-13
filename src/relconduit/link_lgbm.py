@@ -130,6 +130,33 @@ def _evaluate(task, pred: np.ndarray, table) -> float:
     return float(value)
 
 
+def add_entity_features(
+    db, task, pairs: pd.DataFrame, seed_rows: pd.DataFrame, sides: dict[str, FeatureConfig]
+) -> pd.DataFrame:
+    """``pairs`` with entity features joined: ``src.*`` per seed row, ``dst.*`` per distinct
+    ``(dst, seed time)``. ``sides`` maps ``"src"``/``"dst"`` to a config with its vocab set."""
+    src_col, time_col = task.src_entity_col, task.time_col
+    X = pairs
+    if "src" in sides:
+        s = seed_rows[[src_col, time_col]].reset_index(drop=True)
+        F = build_features(db, s, task.src_entity_table, src_col, time_col, sides["src"])
+        F = F.astype({c: np.float32 for c in F.columns if F[c].dtype == np.float64})
+        F.columns = [f"src.{c}" for c in F.columns]
+        X = X.join(F, on=SEED)
+    if "dst" in sides:
+        u = pd.DataFrame(
+            {"dst_id": X[DST].to_numpy(), "t": seed_rows[time_col].to_numpy()[X[SEED]]}
+        ).drop_duplicates(ignore_index=True)
+        F = build_features(db, u, task.dst_entity_table, "dst_id", "t", sides["dst"])
+        F = F.astype({c: np.float32 for c in F.columns if F[c].dtype == np.float64})
+        F.columns = [f"dst.{c}" for c in F.columns]
+        F = pd.concat([u, F], axis=1)
+        X = X.assign(t=seed_rows[time_col].to_numpy()[X[SEED]])
+        X = X.merge(F, left_on=[DST, "t"], right_on=["dst_id", "t"], how="left")
+        X = X.drop(columns=["dst_id", "t"])
+    return X
+
+
 def run(
     dataset_name: str,
     task_name: str,
@@ -224,25 +251,7 @@ def run(
             sides[side] = cfg
 
     def entity_features(pairs: pd.DataFrame, seed_rows: pd.DataFrame) -> pd.DataFrame:
-        X = pairs
-        if "src" in sides:
-            s = seed_rows[[src_col, time_col]].reset_index(drop=True)
-            F = build_features(db, s, task.src_entity_table, src_col, time_col, sides["src"])
-            F = F.astype({c: np.float32 for c in F.columns if F[c].dtype == np.float64})
-            F.columns = [f"src.{c}" for c in F.columns]
-            X = X.join(F, on=SEED)
-        if "dst" in sides:
-            u = pd.DataFrame(
-                {"dst_id": X[DST].to_numpy(), "t": seed_rows[time_col].to_numpy()[X[SEED]]}
-            ).drop_duplicates(ignore_index=True)
-            F = build_features(db, u, task.dst_entity_table, "dst_id", "t", sides["dst"])
-            F = F.astype({c: np.float32 for c in F.columns if F[c].dtype == np.float64})
-            F.columns = [f"dst.{c}" for c in F.columns]
-            F = pd.concat([u, F], axis=1)
-            X = X.assign(t=seed_rows[time_col].to_numpy()[X[SEED]])
-            X = X.merge(F, left_on=[DST, "t"], right_on=["dst_id", "t"], how="left")
-            X = X.drop(columns=["dst_id", "t"])
-        return X
+        return add_entity_features(db, task, pairs, seed_rows, sides)
 
     def split_data(split: str, seed_rows: pd.DataFrame) -> pd.DataFrame:
         path = pairs_dir / f"pairs_{split}.parquet"
