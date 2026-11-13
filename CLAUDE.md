@@ -11,9 +11,11 @@ checks yourself before you open or update a PR.
   file: this machine's pyenv shims intercept it and break `uv`.
 - Run `uv sync --all-extras` after pulling dependency changes.
 - Compute is an Apple Silicon Mac, plus Google Cloud Spot machines for long runs within a **$50 total budget**: 24-vCPU
-  CPU machines now, and a single T4 or L4 GPU only if the owner enables one. Read the `cloud-compute` skill before any
-  run you expect to take the Mac more than about an hour, and never rent a machine without the owner's approval on the
-  issue. Pick the torch device as `cuda`, then `mps`, then `cpu`. Size experiments to finish in hours, not days, and say
+  CPU machines now, and a single T4 or L4 GPU only if the owner enables one. The owner minds the Mac being tied up far
+  more than small cloud spend: send any run that would hold its CPU for more than about 20–30 minutes (multi-seed
+  baselines, feature builds on rel-trial, rel-avito, rel-amazon, rel-hm, rel-stack) to the cloud, and don't scope an
+  issue as "Mac only, $0" by default. Read the `cloud-compute` skill first, and never rent a machine without the owner's
+  approval on the issue: ask for it up front when you scope the issue. Pick the torch device as `cuda`, then `mps`, then `cpu`. Size experiments to finish in hours, not days, and say
   in the PR how long a run took and where it ran.
 - Anything that should keep running after your turn (a long training run, a cloud run) starts with
   `claude-code.task.start` and ends the turn with `claude-code.task.wait`. Background shell jobs die with the turn.
@@ -53,6 +55,9 @@ checks yourself before you open or update a PR.
 ## Working an issue
 
 - One issue is one experiment or one change. Keep PRs focused.
+- Let a PR close its issue (`Closes #<n>`, or `closes_issue: true`) only when the PR is that issue's deliverable. A side
+  change raised while answering a discussion or investigation issue (a rule fix, a small refactor) opens with
+  `closes_issue: false` and no `Closes #<n>`, so merging it leaves the issue open.
 - Before you open or update a PR: `uv run ruff check .`, `uv run ruff format --check .` and `uv run pytest` all pass.
 - The PR description says what was tried, the numbers (with seeds), the runtime, and how to reproduce it.
 - If an issue is ambiguous about scope, the dataset or task, or how much compute to spend, ask in an issue comment rather
