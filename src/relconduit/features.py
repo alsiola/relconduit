@@ -33,7 +33,8 @@ Paths, with ``E`` the entity table:
   category). Named ``<E>.<fk>>><T>__...``.
 
 Aggregates per numeric column, for each window (days before the seed time, ``None`` for all
-time): ``count`` (one per path, not per column), ``mean``, ``min``, ``max`` and, for float
+time): ``count`` (one per path, not per column), ``mean``, ``min``, ``max`` (plus ``sum`` if
+:attr:`FeatureConfig.aggs` asks for it) and, for float
 columns (which can hold missing values, e.g. a finishing position that is NaN for a
 retirement), ``nullfrac``. Over all time, also ``last`` (the value on the most recent row,
 nulls kept) and per path ``days_since_last``. Text columns with at most
@@ -50,6 +51,7 @@ Primary- and foreign-key columns are never used as features.
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -79,6 +81,10 @@ class FeatureConfig:
     """Which paths and aggregates :func:`build_features` computes."""
 
     windows: Sequence[int | None] = DEFAULT_WINDOWS
+    # Per-window aggregates of each numeric column: any of "mean", "min", "max", "sum".
+    aggs: Sequence[str] = WINDOW_AGGS
+    # Text columns with at most this many values get a count per value and window.
+    max_count_categories: int = MAX_COUNT_CATEGORIES
     # Hop 2 through static parents (E <- T -> P <- T2). Off gives hop 1 (+ upward joins) only.
     hop2: bool = True
     # Parent tables P to walk as E <- T -> P <- T2 over every linked P (see the module doc).
@@ -190,6 +196,13 @@ class _Builder:
         self.vocab = vocab
         self.lt = "<=" if cfg._inclusive else "<"
         self.con = duckdb.connect()
+        # Several builds can share a machine: cap each one's DuckDB (defaults: all threads, 80%
+        # of RAM) with RELCONDUIT_DUCKDB_THREADS / RELCONDUIT_DUCKDB_MEMORY (e.g. "12GB").
+        if os.environ.get("RELCONDUIT_DUCKDB_THREADS"):
+            self.con.execute(f"SET threads = {int(os.environ['RELCONDUIT_DUCKDB_THREADS'])}")
+        if os.environ.get("RELCONDUIT_DUCKDB_MEMORY"):
+            self.con.execute(f"SET memory_limit = {_lit(os.environ['RELCONDUIT_DUCKDB_MEMORY'])}")
+        self.con.execute("SET preserve_insertion_order = false")
         self.tables = {n: t for n, t in db.table_dict.items() if n not in set(cfg.exclude_tables)}
         for name, t in self.tables.items():
             df = t.df
@@ -244,14 +257,14 @@ class _Builder:
             for col, stem, nullable in value_cols:
                 c = _q(col)
                 v = self._when(wf, f"CAST({c} AS DOUBLE)")
-                for agg in WINDOW_AGGS:
-                    fn = {"mean": "avg", "min": "min", "max": "max"}[agg]
+                for agg in self.cfg.aggs:
+                    fn = {"mean": "avg", "min": "min", "max": "max", "sum": "sum"}[agg]
                     exprs.append(f"{fn}({v}) AS {_q(f'{prefix}__{stem}__{agg}__{wn}')}")
                 if nullable:
                     isnull = self._when(wf, f"CAST({c} IS NULL AS DOUBLE)")
                     exprs.append(f"avg({isnull}) AS {_q(f'{prefix}__{stem}__nullfrac__{wn}')}")
             for col, stem, values in cat_cols:
-                if len(values) > MAX_COUNT_CATEGORIES:
+                if len(values) > self.cfg.max_count_categories:
                     continue
                 for i, val in enumerate(values):
                     cond = f"CAST({_q(col)} AS VARCHAR) = {_lit(val)}"
@@ -458,7 +471,11 @@ class _Builder:
         """Pooled aggregates of the rows of ``source`` (T2's columns, or a relation with them)
         whose ``fk2`` is one of the seed's linked ``__pid``, strictly before the seed time."""
         cols = [(c, _nullable(t2, c)) for c in _numeric_cols(t2, t2_name, self.cfg)]
-        cats = [(c, v) for c, _, v in self._cat_spec(t2, t2_name) if len(v) <= MAX_COUNT_CATEGORIES]
+        cats = [
+            (c, v)
+            for c, _, v in self._cat_spec(t2, t2_name)
+            if len(v) <= self.cfg.max_count_categories
+        ]
         inner, outer = self._rollup_selects(prefix, cols, cats)
         sql = f"""
         WITH k AS (SELECT DISTINCT __pid, {_SEED_T} FROM {links}),
@@ -538,11 +555,14 @@ class _Builder:
                 v = self._when(wf, f"CAST({_q(col)} AS DOUBLE)")
                 nn, sm = part(f"count({v})"), part(f"sum({v})")
                 mn, mx = part(f"min({v})"), part(f"max({v})")
-                outer.append(
-                    f"sum({sm}) / nullif(sum({nn}), 0) AS {_q(f'{prefix}__{col}__mean__{wn}')}"
-                )
-                outer.append(f"min({mn}) AS {_q(f'{prefix}__{col}__min__{wn}')}")
-                outer.append(f"max({mx}) AS {_q(f'{prefix}__{col}__max__{wn}')}")
+                pooled = {
+                    "mean": f"sum({sm}) / nullif(sum({nn}), 0)",
+                    "min": f"min({mn})",
+                    "max": f"max({mx})",
+                    "sum": f"sum({sm})",
+                }
+                for agg in self.cfg.aggs:
+                    outer.append(f"{pooled[agg]} AS {_q(f'{prefix}__{col}__{agg}__{wn}')}")
                 if nullable:
                     outer.append(
                         f"1 - sum({nn}) / nullif(sum({n}), 0) "
