@@ -14,6 +14,11 @@ Only after the owner has approved the run on its issue. Steps:
     few minutes and at the end, and echo the log here;
  5. copy each --download back, delete the machine, and record its hours and price in the cost ledger on main.
 
+The exit code is the command's own. When the command succeeded but a step after it failed (a --download or the
+checkpoints didn't copy back, or the ledger push to main didn't land, each after several tries), it ends with
+POST_RUN_FAILED (3) and a `[cloud] post-run` list saying how to redo each one: the run's work is done, only the
+bookkeeping needs finishing by hand.
+
 A machine Google takes back is replaced and the run resumes from its checkpoints, up to --retries times, within the
 original --hours. RelBench datasets download from the Hugging Face Hub on the machine; nothing secret is copied up.
 """
@@ -37,9 +42,14 @@ from pathlib import Path
 
 from relconduit import costs
 from relconduit.results import git_commit
+from relconduit.retry import retry
 
 ROOT = costs.ROOT
 POLL_SECONDS = 60
+# The command succeeded, but copying something back or recording the cost didn't.
+POST_RUN_FAILED = 3
+# gcloud storage's own part-written download files: never worth syncing, and one caught mid-write fails the whole copy.
+RSYNC_EXCLUDE = r"--exclude=.*\.gstmp$"
 REGION_NAMES = {
     "europe-west2": "London"
 }  # the Cloud Billing catalogue's names for the regions we use
@@ -158,14 +168,14 @@ def sync_lines(
     for p in checkpoints:
         if direction == "save":
             out.append(
-                f'if [ -d "{repo}/{p}" ]; then gcloud storage rsync --recursive --quiet "{repo}/{p}" "{prefix}/{p}" '
+                f'if [ -d "{repo}/{p}" ]; then gcloud storage rsync --recursive --quiet {shlex.quote(RSYNC_EXCLUDE)} "{repo}/{p}" "{prefix}/{p}" '
                 f'|| {{ echo "[checkpoint] saving {p} to {prefix} failed (exit $?)" >&2; touch "$HOME/checkpoint.failed"; }}; fi'
             )
         else:
             out.append(
                 f'mkdir -p "{repo}/{p}"\n'
                 f'if listing=$(gcloud storage ls "{prefix}/{p}/" 2>&1); then\n'
-                f'  gcloud storage rsync --recursive --quiet "{prefix}/{p}" "{repo}/{p}" && echo "[checkpoint] restored {p}"\n'
+                f'  gcloud storage rsync --recursive --quiet {shlex.quote(RSYNC_EXCLUDE)} "{prefix}/{p}" "{repo}/{p}" && echo "[checkpoint] restored {p}"\n'
                 f'elif echo "$listing" | grep -q "matched no objects"; then\n'
                 f'  echo "[checkpoint] nothing saved for {p} yet; starting fresh"\n'
                 f'else\n  echo "[checkpoint] can\'t read {prefix}/{p}: $listing" >&2; exit 1\nfi'
@@ -479,10 +489,22 @@ def run_once(plan: dict, name: str, hours: float) -> int | None:
             gc.scp(f"{name}:run.log", str(work / "run.log"))
         except RuntimeError:
             pass
+        # A failed copy is retried, then noted: it mustn't stop the other downloads or the ledger.
         for d in plan["downloads"]:
             local = ROOT / d
             local.parent.mkdir(parents=True, exist_ok=True)
-            gc.scp(f"{name}:repo/{d}", str(local.parent))
+            try:
+                retry(
+                    lambda d=d, local=local: gc.scp(f"{name}:repo/{d}", str(local.parent)),
+                    attempts=3,
+                    base=10.0,
+                    what=f"copying {d} back",
+                )
+            except RuntimeError as e:
+                plan["problems"].append(
+                    f"--download {d} didn't copy back ({e}); the machine is deleted, so it's lost unless the "
+                    "command also wrote it under a --checkpoint folder"
+                )
         return exit_code
     finally:
         if created:
@@ -522,10 +544,9 @@ def record_machine(plan: dict, name: str, started: float, ended: float) -> None:
             f"[cloud] {hours:.2f}h at ${plan['per_hour']:.3f}/h = ${usd:.2f}; in the cost ledger at {commit[:8]}"
         )
     except Exception as e:  # noqa: BLE001 - the run's work is already home; say how to fix the ledger
-        print(
-            f"[cloud] couldn't write the cost ledger ({e}): add it by hand with "
-            f'`uv run costs add --kind cloud --what "{name}" --usd {usd} --issue {plan["issue"]}`',
-            file=sys.stderr,
+        plan["problems"].append(
+            f"the cost ledger push failed ({e}); record it by hand with "
+            f'`uv run costs add --kind cloud --what "{name}" --usd {usd} --issue {plan["issue"]}`'
         )
 
 
@@ -635,10 +656,11 @@ def main(argv: list[str] | None = None) -> int:
         "prefix": prefix,
         "per_hour": per_hour,
         "commit": git_commit(ROOT),
+        "problems": [],  # post-run steps that failed, each saying how to redo it
     }
     retries = a.retries if checkpoints else 0
     deadline = time.time() + a.hours * 3600
-    exit_code = 0
+    exit_code, failed = 0, True
     try:
         for attempt in range(retries + 1):
             name = f"{cfg['bucketPrefix']}-{a.issue}-{int(time.time() * 1000):x}"[:63]
@@ -652,22 +674,49 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"[cloud] {e}; starting again from the checkpoints ({retries - attempt} retries, {left:.2f}h left)"
                 )
+        failed = False
     finally:
         for c in checkpoints:  # the checkpoints come home even when every machine was lost
             (ROOT / c).mkdir(parents=True, exist_ok=True)
-            code, _ = gc.run(
-                ["storage", "rsync", "--recursive", f"{prefix}/{c}", str(ROOT / c)],
-                echo=True,
-                allow_fail=True,
-                mutating=True,
-            )
-            if code != 0:
-                print(
-                    f"[cloud] copying checkpoints back from {prefix}/{c} failed; they stay in the bucket for 30 days",
-                    file=sys.stderr,
+            args = [
+                "storage",
+                "rsync",
+                "--recursive",
+                RSYNC_EXCLUDE,
+                f"{prefix}/{c}",
+                str(ROOT / c),
+            ]
+            try:  # rsync copies only what differs, so each try picks up just the files the last one missed
+                retry(
+                    lambda args=args: gc.run(args, echo=True, mutating=True),
+                    attempts=3,
+                    base=10.0,
+                    what=f"copying {prefix}/{c} back",
                 )
-                exit_code = exit_code or 1
-    return exit_code
+            except RuntimeError:
+                plan["problems"].append(
+                    f"the checkpoints in {prefix}/{c} didn't copy back; they stay in the bucket for 30 days: "
+                    f"`gcloud storage rsync --recursive {shlex.quote(RSYNC_EXCLUDE)} {prefix}/{c} {c}`"
+                )
+        if failed:  # an error is on its way out; still list what needs redoing
+            finish(None, plan["problems"])
+    return finish(exit_code, plan["problems"])
+
+
+def finish(exit_code: int | None, problems: list[str]) -> int:
+    """The exit code, after listing any post-run step that failed and how to redo it. The command's own failure wins;
+    a successful command with unfinished bookkeeping ends with POST_RUN_FAILED rather than looking like a failed run.
+    None means the run itself stopped with an error (which is then on its way out)."""
+    if not problems:
+        return exit_code or 0
+    state = {None: "stopped with an error", 0: "succeeded"}.get(exit_code, f"exited {exit_code}")
+    print(
+        f"[cloud] post-run: the command {state}, but {len(problems)} step(s) after it failed:",
+        file=sys.stderr,
+    )
+    for p in problems:
+        print(f"[cloud] post-run:   - {p}", file=sys.stderr)
+    return exit_code or POST_RUN_FAILED
 
 
 if __name__ == "__main__":
