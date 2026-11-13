@@ -236,9 +236,7 @@ def main() -> None:
         msgs = [f.result() for f in rankers]
         # rel-avito's upstream seeds: once the rankers have given their memory back.
         futs += [
-            avito_pool.submit(
-                upstream_lgbm, d, t, s, out, 2 * a.upstream_threads, a.avito_free_gb
-            )
+            avito_pool.submit(upstream_lgbm, d, t, s, out, 2 * a.upstream_threads, a.avito_free_gb)
             for d, t in avito
             for s in SEEDS
             if wanted(f"lgbm_{d}_{t}_s{s}")
