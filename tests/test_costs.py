@@ -79,3 +79,29 @@ def test_push_gives_up_with_the_reason(repos, monkeypatch):
     monkeypatch.setattr(costs, "git", git)
     with pytest.raises(RuntimeError, match="after 3 tries.*could not read Username"):
         costs.push_to_main(costs.LEDGER, "{}", "m", attempts=3, sleep=lambda s: None)
+
+
+def test_a_push_that_landed_but_reported_failure_is_not_recorded_twice(repos, monkeypatch):
+    origin, _ = repos
+    real_git, pushes = costs.git, []
+
+    def git(*args, **kw):
+        out = real_git(*args, **kw)
+        if args[0] == "push" and not pushes:
+            pushes.append(
+                1
+            )  # the server took it, then the connection dropped before git heard back
+            raise RuntimeError("git push failed: Connection reset by peer")
+        return out
+
+    monkeypatch.setattr(costs, "git", git)
+    commit = costs.record_cost(
+        {"at": "2026-02-01", "what": "mine", "usd": 2.0}, sleep=lambda s: None
+    )
+    assert [e["usd"] for e in entries(origin)] == [1.0, 2.0]
+    assert commit == sh(origin, "git", "rev-parse", "main")
+
+
+def test_add_entry_is_idempotent():
+    once = costs.add_entry("", {"at": "2026-02-01", "what": "m", "usd": 2.0})
+    assert costs.add_entry(once, {"at": "2026-02-01", "what": "m", "usd": 2.0}) == once

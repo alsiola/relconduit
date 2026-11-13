@@ -36,13 +36,13 @@ def load_config() -> dict:
     return json.loads(CONFIG.read_text())
 
 
-def git(*args: str, env: dict | None = None, check: bool = True) -> str:
+def git(*args: str, env: dict | None = None, check: bool = True, strip: bool = True) -> str:
     res = subprocess.run(
         ["git", "-C", str(ROOT), *args], capture_output=True, text=True, env=env, check=False
     )
     if check and res.returncode != 0:
         raise RuntimeError(f"git {' '.join(args[:2])} failed: {res.stderr.strip()}")
-    return res.stdout.strip()
+    return res.stdout.strip() if strip else res.stdout
 
 
 def ledger_on_main() -> dict:
@@ -66,18 +66,19 @@ def push_to_main(
     """Commits one file onto origin/main and pushes it, without touching the working tree. Returns the commit.
 
     `content` is the file's new text, or a function from main's current text ("" when it has none) to the new text,
-    called again on every try so a push that lost a race to another worktree rebuilds on top of what won. A failed
+    called again on every try so a push that lost a race to another worktree rebuilds on top of what won. When main
+    already holds that text (a try whose push landed though git reported it failed), nothing is pushed and main's
+    commit is returned. A failed
     fetch or push (a race, or a blip in the network or the credential helper) is retried with backoff and jitter,
     about two minutes in all; the error names git's last complaint.
     """
 
     def attempt() -> str:
         git("fetch", "-q", "origin", "main")
-        text = (
-            content(git("show", f"origin/main:{path}", check=False))
-            if callable(content)
-            else content
-        )
+        current = git("show", f"origin/main:{path}", check=False, strip=False)
+        text = content(current) if callable(content) else content
+        if text == current:
+            return git("rev-parse", "origin/main")
         with tempfile.TemporaryDirectory() as tmp:
             env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
             git("read-tree", "origin/main", env=env)
@@ -108,8 +109,11 @@ def push_to_main(
 
 
 def add_entry(raw: str, entry: dict) -> str:
-    """The ledger file's text with `entry` added, given its current text ("" for none)."""
+    """The ledger file's text with `entry` added, given its current text ("" for none). Unchanged if `entry` is
+    already there, so retrying a push that in fact landed can't record the same cost twice."""
     ledger = json.loads(raw) if raw.strip() else {"$comment": COMMENT, "entries": []}
+    if entry in ledger["entries"]:
+        return raw
     entries = sorted([*ledger["entries"], entry], key=lambda e: e["at"])
     return (
         json.dumps({"$comment": ledger.get("$comment", COMMENT), "entries": entries}, indent=2)
