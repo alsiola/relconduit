@@ -120,6 +120,14 @@
       "issue": "21",
       "usd": 0.25,
       "priced": "entered"
+    },
+    {
+      "at": "2026-11-13T22:19:48+00:00",
+      "kind": "cloud",
+      "what": "relconduit-21-1a1d6fa8621 (0.08 h, stopped: top-k bug)",
+      "issue": "21",
+      "usd": 0.04,
+      "priced": "entered"
     }
   ]
 }
