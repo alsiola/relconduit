@@ -15,12 +15,19 @@ Keys and time columns are always kept. Otherwise the result is what ``task.get_d
 column for column: rows dated after the test timestamp dropped with the same ``<=``
 (``upto_test_timestamp=True``), the task's ``remove_columns`` dropped, and the dataset's own
 ``validate_and_correct_db`` applied (dangling foreign keys set to null).
+
+``text_lengths`` adds the character length of chosen text columns (``<col>_len``, ``NaN`` where
+the text is null) without loading the text: rel-amazon's ``user-item-review`` labels are reviews
+with ``LENGTH(review_text) > 300``, so the length is a feature of a past review that the task
+cares about. The text is read one batch at a time and only its lengths are kept.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -66,6 +73,7 @@ def load_tables(
     remove_columns: list[tuple[str, str]] = (),
     max_categories: int = MAX_CATEGORIES,
     sample_rows: int = SAMPLE_ROWS,
+    text_lengths: dict[str, Sequence[str]] | None = None,
 ) -> tuple[Database, dict[str, list[str]]]:
     """A :class:`Database` from ``<db_dir>/<table>.parquet``, and the columns left out.
 
@@ -91,6 +99,10 @@ def load_tables(
         arrow = pq.read_table(db_dir / f"{name}.parquet", columns=kept, filters=filters)
         df = arrow.to_pandas()
         del arrow
+        for col in (text_lengths or {}).get(name, ()):
+            df[f"{col}_len"] = _text_lengths(db_dir / f"{name}.parquet", col, time_col, cutoff)
+            if len(df[f"{col}_len"]) != len(df):
+                raise AssertionError(f"{name}.{col}: lengths out of step with the rows")
         for col in df.columns:  # as relbench's loader: DuckDB can't ingest StringDtype
             if isinstance(df[col].dtype, pd.StringDtype):
                 df[col] = df[col].astype(object)
@@ -102,6 +114,23 @@ def load_tables(
         )
         left_out[name] = dropped
     return Database(table_dict), left_out
+
+
+def _text_lengths(
+    path: Path, col: str, time_col: str | None, cutoff: pd.Timestamp | None
+) -> np.ndarray:
+    """Character lengths of ``col``, row for row as :func:`load_tables` reads the file (the
+    same ``<=`` cutoff on ``time_col``), as float32 with NaN for null."""
+    pf = pq.ParquetFile(path)
+    cols = [col] + ([time_col] if cutoff is not None and time_col is not None else [])
+    out = []
+    for batch in pf.iter_batches(columns=cols, batch_size=500_000):
+        n = pc.utf8_length(batch.column(col))
+        if len(cols) > 1:
+            keep = pc.less_equal(batch.column(time_col), pa.scalar(pd.Timestamp(cutoff)))
+            n = pc.filter(n, pc.fill_null(keep, False))
+        out.append(n.to_numpy(zero_copy_only=False).astype(np.float32))
+    return np.concatenate(out) if out else np.zeros(0, dtype=np.float32)
 
 
 def load_task_db(task, upto_test_timestamp: bool = True, **kwargs) -> Database:

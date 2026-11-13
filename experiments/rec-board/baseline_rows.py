@@ -27,6 +27,11 @@ TASKS = [
     ("rel-stack", "post-post-related"),
     ("rel-trial", "condition-sponsor-run"),
     ("rel-f1", "driver-circuit-compete"),
+    # Wave 2 (issue 21): trivial baselines only (``--only trivial``).
+    ("rel-amazon", "user-item-purchase"),
+    ("rel-amazon", "user-item-rate"),
+    ("rel-amazon", "user-item-review"),
+    ("rel-hm", "user-item-purchase"),
 ]
 SEEDS = (42, 43, 44)
 UPSTREAM = "experiments/rel-f1/baselines/upstream"
