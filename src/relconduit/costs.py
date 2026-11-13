@@ -16,9 +16,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+
+from relconduit.retry import retry
 
 ROOT = Path(__file__).resolve().parents[2]
 LEDGER = "costs/ledger.json"
@@ -52,16 +56,34 @@ def spent(ledger: dict) -> float:
     return round(sum(e.get("usd") or 0 for e in ledger["entries"]), 2)
 
 
-def push_to_main(path: str, content: str, message: str, attempts: int = 5) -> str:
-    """Commits one file onto origin/main and pushes it, without touching the working tree. Retries on a race."""
-    for _ in range(attempts):
+def push_to_main(
+    path: str,
+    content: str | Callable[[str], str],
+    message: str,
+    attempts: int = 6,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Commits one file onto origin/main and pushes it, without touching the working tree. Returns the commit.
+
+    `content` is the file's new text, or a function from main's current text ("" when it has none) to the new text,
+    called again on every try so a push that lost a race to another worktree rebuilds on top of what won. A failed
+    fetch or push (a race, or a blip in the network or the credential helper) is retried with backoff and jitter,
+    about two minutes in all; the error names git's last complaint.
+    """
+
+    def attempt() -> str:
         git("fetch", "-q", "origin", "main")
+        text = (
+            content(git("show", f"origin/main:{path}", check=False))
+            if callable(content)
+            else content
+        )
         with tempfile.TemporaryDirectory() as tmp:
             env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
             git("read-tree", "origin/main", env=env)
             blob = subprocess.run(
                 ["git", "-C", str(ROOT), "hash-object", "-w", "--stdin"],
-                input=content,
+                input=text,
                 capture_output=True,
                 text=True,
                 check=True,
@@ -69,32 +91,38 @@ def push_to_main(path: str, content: str, message: str, attempts: int = 5) -> st
             git("update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=env)
             tree = git("write-tree", env=env)
         commit = git("commit-tree", tree, "-p", "origin/main", "-m", message)
-        if (
-            subprocess.run(
-                ["git", "-C", str(ROOT), "push", "-q", "origin", f"{commit}:refs/heads/main"],
-                capture_output=True,
-                text=True,
-                check=False,
-            ).returncode
-            == 0
-        ):
-            return commit
-    raise RuntimeError(f"couldn't push {path} to main after {attempts} tries")
+        git("push", "-q", "origin", f"{commit}:refs/heads/main")
+        return commit
 
-
-def record_cost(entry: dict) -> str:
-    """Adds an entry to main's ledger and pushes it. Returns the commit."""
-    ledger = ledger_on_main()
-    ledger["entries"].append(entry)
-    ledger["entries"].sort(key=lambda e: e["at"])
-    body = (
-        json.dumps(
-            {"$comment": ledger.get("$comment", COMMENT), "entries": ledger["entries"]}, indent=2
+    try:
+        return retry(
+            attempt,
+            attempts=attempts,
+            base=4.0,
+            cap=60.0,
+            what=f"pushing {path} to main",
+            sleep=sleep,
         )
+    except Exception as e:  # every failed try ends here; say which file and why
+        raise RuntimeError(f"couldn't push {path} to main after {attempts} tries: {e}") from e
+
+
+def add_entry(raw: str, entry: dict) -> str:
+    """The ledger file's text with `entry` added, given its current text ("" for none)."""
+    ledger = json.loads(raw) if raw.strip() else {"$comment": COMMENT, "entries": []}
+    entries = sorted([*ledger["entries"], entry], key=lambda e: e["at"])
+    return (
+        json.dumps({"$comment": ledger.get("$comment", COMMENT), "entries": entries}, indent=2)
         + "\n"
     )
+
+
+def record_cost(entry: dict, sleep: Callable[[float], None] = time.sleep) -> str:
+    """Adds an entry to main's ledger and pushes it. Returns the commit."""
     usd = "unpriced" if entry.get("usd") is None else f"${entry['usd']:.2f}"
-    return push_to_main(LEDGER, body, f"Cost: {entry['what'][:80]}, {usd}")
+    return push_to_main(
+        LEDGER, lambda raw: add_entry(raw, entry), f"Cost: {entry['what'][:80]}, {usd}", sleep=sleep
+    )
 
 
 # --- Prices -------------------------------------------------------------------------------------------------------

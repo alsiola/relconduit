@@ -100,3 +100,17 @@ def test_start_script_exports_commit():
     assert "export RELCONDUIT_COMMIT=abc1234\n" in script
     assert script.index("RELCONDUIT_COMMIT") < script.index("uv run python x.py")
     assert "RELCONDUIT_COMMIT" not in cloud.start_script("x", save="", checkpoint_minutes=10)
+
+
+def test_finish_keeps_the_command_result_apart_from_bookkeeping(capsys):
+    assert cloud.finish(0, []) == 0
+    assert cloud.finish(2, []) == 2
+    assert cloud.finish(0, ["ledger push failed; `uv run costs add ...`"]) == cloud.POST_RUN_FAILED
+    err = capsys.readouterr().err
+    assert "the command succeeded" in err and "uv run costs add" in err
+    assert cloud.finish(2, ["checkpoints didn't copy back"]) == 2
+
+
+def test_sync_lines_skip_gcloud_temp_files():
+    for direction in ("save", "restore"):
+        assert "gstmp" in cloud.sync_lines(["runs/x"], "gs://b/p", direction)
