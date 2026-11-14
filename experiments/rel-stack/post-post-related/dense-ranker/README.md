@@ -4,6 +4,10 @@ Issue 29. Task: for each `rel-stack` seed post, rank the 100 posts most likely t
 window. Metric: MAP@100. The starting point is issue 12's `cand-lgbm-ranker`: test .1993 ± .0047 against the
 leader Kapso's .2178. No Kapso code or write-up was read; everything below comes from our own measurements.
 
+**Result:** the final config adds frozen `all-MiniLM-L6-v2` kNN candidates (built only from posts dated before the
+seed time) and the cosine feature. It scores **test .2484 ± .0019** (3 seeds, official evaluation), above Kapso's
+.2178 and issue 12's .1993.
+
 ## Phase 1: where the MAP goes (val only)
 
 `../diagnose/phase1.py` rebuilds issue 12's val pairs and rescores them with its three saved models, reproducing
@@ -98,8 +102,8 @@ same 226 rows, so it carries a winner's-curse bias.
 
 | split | MAP | per seed |
 |---|---|---|
-| val | .2309 ± .0011 | TODO |
-| test | **TODO** | TODO |
+| val | .2309 ± .0011 | .2319, .2297, .2310 |
+| test | **.2484 ± .0019** | .2504, .2467, .2480 |
 
 Val is optimistic: it chose the variant and the stopping round.
 
@@ -108,12 +112,17 @@ Val is optimistic: it chose the variant and the stopping round.
 | | test |
 |---|---|
 | Kapso (leader) | .2178 |
-| **dense-ranker (this)** | **TODO** |
+| **dense-ranker (this)** | **.2484 ± .0019** |
 | cand-lgbm-ranker (issue 12) | .1993 ± .0047 |
 | ID-GNN | .1075 |
 | LightGBM (upstream) | .0168 |
 
-TODO: where it sits.
+On the official `relbench.submit` evaluation, the 3-seed test mean is **.031 above Kapso's .2178** and .049 above
+issue 12's .1993. Every seed beats Kapso on its own. The seed std (.0019) is small, but the 258 test rows carry about
+.02 of row-sampling noise (the phase 1 bootstrap on val's 226 rows gave .021). So the lead over Kapso is about 1.5
+sampling stds: a clear lead on the published number, not a statistically settled one. Without Kapso's predictions,
+there can be no paired test. Test was scored once, for the config chosen on val beforehand. Nothing has been
+submitted to the leaderboard.
 
 ## Run
 
@@ -121,7 +130,8 @@ Everything ran on Google Cloud Spot `n2-custom-24-131072` (24 vCPUs, 128 GB, eur
 
 - **Run 1**, embeddings and all val ablations: 2.24 h (embedding both encoders in parallel 46 min; pairs and
   features 6 min; 55 fits 87 min), $0.88.
-- **Run 2**, test once with the saved seed 0–2 models: TODO.
+- **Run 2**, test once with the saved seed 0–2 models: 6 min of work (rebuilding the pairs 2.5 min, scoring
+  0.2 min, plus setup), about 0.12 h billed, $0.05. Val reproduced run 1's .2309 exactly before test was scored.
 
 ```sh
 # Mac smoke test (150 seeds, 1 ranker seed, no results; 2.6 min): embed a small slice of each encoder with
