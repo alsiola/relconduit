@@ -82,6 +82,13 @@ class SearchPlan:
     submission_seed: int = 0  # the seed whose test table is the candidate submission
     chunk_rows: int = 3_000  # seed rows per pair-building chunk (whole seed times)
     extra: dict = field(default_factory=dict)
+    # Pair chunks built at once, in forked processes (1: in this process).
+    workers: int = 1
+    # Build train pairs before any fit: "stage1" (each variant's stage-1 subset) or "full"
+    # (every train row, for the first variant). Keeps forks away from LightGBM's OpenMP.
+    prebuild: str | None = None
+    # Keep each final seed's val and test prediction tables and per-candidate scores.
+    save_scores: bool = False
 
 
 # --- pure helpers (tested) ---------------------------------------------------------------
@@ -190,35 +197,60 @@ class _Data:
         """All pairs of ``rows.iloc[positions]`` (all rows if ``None``), features joined;
         ``seed`` is the position in ``rows``."""
         c = self.ctx
-        out = []
         pos = np.arange(len(rows)) if positions is None else np.asarray(positions)
-        for i, local in enumerate(time_chunks(rows[c.time_col].iloc[pos], c.plan.chunk_rows)):
-            idx = pos[local]
-            path = self.dir / f"{split}_{i:03d}.parquet"
-            if path.exists():
-                out.append(pd.read_parquet(path))
-                continue
-            t1 = time.time()
-            sub = rows.iloc[idx].reset_index(drop=True)
-            pairs = self.builder.build(sub, c.src_col, c.time_col)
-            n_pairs = len(pairs)
-            if positive_only:
-                y = label_pairs(pairs, sub, c.dst_col)
-                pairs = pairs[_with_positive(pairs, y)].reset_index(drop=True)
-            X = add_entity_features(c.db, c.task, pairs, sub, c.sides)
-            X = X.astype({k: np.float32 for k in X.columns if X[k].dtype == np.float64})
-            X[SEED] = idx[X[SEED].to_numpy()]
-            tmp = path.with_suffix(".tmp")
-            X.to_parquet(tmp)
-            tmp.rename(path)
-            out.append(X)
-            c.log(
-                f"{self.name} {split} chunk {i}: {len(sub):,} seeds, {n_pairs:,} pairs, "
-                f"kept {len(X):,} x {X.shape[1]} ({time.time() - t1:.0f}s, "
-                f"peak rss {_rss_gb():.1f} GB)"
-            )
-        X = _categorical(pd.concat(out, ignore_index=True))
+        chunks = [
+            (i, pos[local])
+            for i, local in enumerate(time_chunks(rows[c.time_col].iloc[pos], c.plan.chunk_rows))
+        ]
+        paths = [self.dir / f"{split}_{i:03d}.parquet" for i, _ in chunks]
+        todo = [ch for ch, path in zip(chunks, paths) if not path.exists()]
+        workers = min(c.plan.workers, len(todo))
+        if workers > 1:
+            global _FORK_JOB
+            _FORK_JOB = (self, split, rows, positive_only)
+            import multiprocessing as mp
+
+            with mp.get_context("fork").Pool(workers, maxtasksperchild=1) as pool:
+                for msg in pool.imap_unordered(_forked_chunk, todo):
+                    c.log(msg)
+            _FORK_JOB = None
+        else:
+            for i, idx in todo:
+                c.log(self.build_chunk(split, rows, positive_only, i, idx))
+        X = _categorical(pd.concat([pd.read_parquet(p) for p in paths], ignore_index=True))
         return X.sort_values([SEED, DST], kind="mergesort").reset_index(drop=True)
+
+    def build_chunk(self, split, rows, positive_only, i, idx) -> str:
+        """Build, write (by rename) and describe one chunk of pairs."""
+        c = self.ctx
+        path = self.dir / f"{split}_{i:03d}.parquet"
+        t1 = time.time()
+        sub = rows.iloc[idx].reset_index(drop=True)
+        pairs = self.builder.build(sub, c.src_col, c.time_col)
+        n_pairs = len(pairs)
+        if positive_only:
+            y = label_pairs(pairs, sub, c.dst_col)
+            pairs = pairs[_with_positive(pairs, y)].reset_index(drop=True)
+        X = add_entity_features(c.db, c.task, pairs, sub, c.sides)
+        X = X.astype({k: np.float32 for k in X.columns if X[k].dtype == np.float64})
+        X[SEED] = idx[X[SEED].to_numpy()]
+        tmp = path.with_suffix(".tmp")
+        X.to_parquet(tmp)
+        tmp.rename(path)
+        return (
+            f"{self.name} {split} chunk {i}: {len(sub):,} seeds, {n_pairs:,} pairs, "
+            f"kept {len(X):,} x {X.shape[1]} ({time.time() - t1:.0f}s, "
+            f"peak rss {_rss_gb():.1f} GB)"
+        )
+
+
+_FORK_JOB = None  # (data, split, rows, positive_only) for forked chunk builders
+
+
+def _forked_chunk(job) -> str:
+    data, split, rows, positive_only = _FORK_JOB
+    i, idx = job
+    return data.build_chunk(split, rows, positive_only, i, idx)
 
 
 def _categorical(X: pd.DataFrame) -> pd.DataFrame:
@@ -287,6 +319,7 @@ def run_search(
     smoke_rows: int | None = None,
     leakage_seeds: int = 40,
     n_boot: int = 2000,
+    approach_dir: str = "cand-lgbm-ranker-plus",
 ) -> dict:
     """Run the search (see the module doc). Returns the summary, also written to
     ``<work>/summary.json`` (``summary_val.json`` without test, ``summary_smoke.json`` for a
@@ -299,7 +332,7 @@ def run_search(
     ds = relbench.load_dataset(f"stanford-star/relbench-v1/{dataset_name}")
     task = ds.load_task(task_name)
     k = task.eval_k
-    work = Path(work_dir) / dataset_name / task_name / "cand-lgbm-ranker-plus"
+    work = Path(work_dir) / dataset_name / task_name / approach_dir
     if smoke_rows:
         if score_test:
             raise ValueError("a smoke run never scores test")
@@ -395,10 +428,20 @@ def run_search(
         recall[name] = rec
         ctx.log(f"{name}: val recall {json.dumps({a: round(b, 4) for a, b in rec.items()})}")
 
+    if plan.prebuild == "stage1":
+        for name in plan.variants:
+            sub = nested_subset(len(train_rows), plan.stage1_rows)
+            data[name].split(f"train{plan.stage1_rows}", train_rows, True, positions=sub)
+
     # --- datasets --------------------------------------------------------------------------
     datasets: dict[tuple, tuple] = {}
     train_X: dict[str, pd.DataFrame] = {}
     stage1_winner: dict[str, str] = {}
+
+    if plan.prebuild == "full":
+        first = next(iter(plan.variants))
+        train_X[first] = data[first].split("train", train_rows, positive_only=True)
+        ctx.log(f"{first}: train pairs {train_X[first].shape}, peak rss {_rss_gb():.1f} GB")
 
     def get_train(name: str, size: int | None) -> pd.DataFrame:
         """Train pairs: stage 1 builds only its subset; later stages the whole table."""
@@ -516,6 +559,27 @@ def run_search(
     # 4. final seeds
     final = fit_scores(variant, size, config, tuple(plan.final_seeds))
     _, _, cols, info = get_datasets(variant, size)
+
+    def model_for(seed: int) -> lgb.Booster:
+        return lgb.Booster(
+            model_file=str(models / f"{_slug(key(variant, size, config, seed))}.txt")
+        )
+
+    def save_scores(split: str, X: pd.DataFrame, s: np.ndarray, seed: int) -> None:
+        d = work / "pred" / f"seed{seed}"
+        d.mkdir(parents=True, exist_ok=True)
+        out = pd.DataFrame({SEED: X[SEED].to_numpy(), DST: X[DST].to_numpy(), "score": s})
+        out.astype({"score": np.float32}).to_parquet(d / f"{split}_scores.parquet")
+
+    if plan.save_scores:
+        for seed in plan.final_seeds:
+            Xv = val_X[variant]
+            s = model_for(seed).predict(Xv[cols])
+            save_scores("val", Xv, s, seed)
+            if not smoke_rows:  # the table must cover every val row
+                path = work / "pred" / f"seed{seed}" / f"{dataset_name}__{task_name}__val.csv"
+                write_prediction_table(task, top_k(Xv, s, len(val_rows), k), path, split="val")
+        ctx.log(f"saved val tables and scores for seeds {list(plan.final_seeds)}")
     train_X.clear()
     summary = {
         "dataset": dataset_name,
@@ -555,10 +619,9 @@ def run_search(
     X_test = data[variant].split("test", test_rows, positive_only=False)
     preds, test_scores = [], []
     for seed in plan.final_seeds:
-        model = lgb.Booster(
-            model_file=str(models / f"{_slug(key(variant, size, config, seed))}.txt")
-        )
-        s = model.predict(X_test[cols])
+        s = model_for(seed).predict(X_test[cols])
+        if plan.save_scores:
+            save_scores("test", X_test, s, seed)
         pred = top_k(X_test, s, len(test_rows), k)
         path = work / "pred" / f"seed{seed}" / f"{dataset_name}__{task_name}.csv"
         write_prediction_table(task, pred, path)
@@ -673,6 +736,7 @@ def main(
     dst_features: FeatureConfig | None,
     notes: str = "",
     argv: Sequence[str] | None = None,
+    approach_dir: str = "cand-lgbm-ranker-plus",
 ) -> dict:
     """Command line for an experiment's ``run.py``: ``--smoke``, ``--test``, ``--work-dir``."""
     import argparse
@@ -686,7 +750,7 @@ def main(
     p.add_argument("--pairs-dir")
     p.add_argument("--n-boot", type=int, default=2000)
     a = p.parse_args(argv)
-    approach = f"experiments/{dataset}/{task}/cand-lgbm-ranker-plus"
+    approach = f"experiments/{dataset}/{task}/{approach_dir}"
     summary = run_search(
         dataset,
         task,
@@ -700,6 +764,7 @@ def main(
         smoke_rows=a.smoke,
         leakage_seeds=8 if a.smoke else 40,
         n_boot=a.n_boot,
+        approach_dir=approach_dir,
     )
     keys = ("chosen", "val_scores", "test_scores", "test_bootstrap", "verdict", "top_features")
     print(json.dumps({x: summary.get(x) for x in keys}, indent=2), flush=True)
