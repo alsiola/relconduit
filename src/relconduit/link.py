@@ -153,6 +153,12 @@ class LinkConfig:
     pop_windows: Sequence[int] = (7, 30, 91, 365)
     # edge set -> (window days, n): the global top n dsts by edge count over the window.
     pop_candidates: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # name -> a dense text index (relconduit.post_embed.DenseSource): its n nearest
+    # neighbours as candidates, the cosine and rank as pair features.
+    dense: dict = field(default_factory=dict)
+    # name -> an edge set from the src/dst entity to tokens (tags, words): per pair, how many
+    # tokens both sides carry (``<name>__shared``) and that over the union (``__jaccard``).
+    overlaps: dict[str, str] = field(default_factory=dict)
     # Testing only: keep edges dated exactly at the seed time (``<=``), a planted leak.
     _inclusive: bool = field(default=False, repr=False)
 
@@ -220,6 +226,11 @@ class PairBuilder:
     def __init__(self, db: Database, config: LinkConfig):
         self.cfg = config
         self.edges = {name: fn(db) for name, fn in config.edges.items()}
+        # Each dense index cut to the posts whose text rows this database holds.
+        self.dense = {
+            name: (src.index.restrict(src.available(db)) if src.available else src.index)
+            for name, src in config.dense.items()
+        }
         # Work that depends only on the seed time (filtered edge sets, walk matrices,
         # popularity), kept for the last seed time seen, so one seed time built in several
         # chunks of seeds does it once.
@@ -237,7 +248,7 @@ class PairBuilder:
         """The candidate sources, in the order of their ``cand__<source>`` columns."""
         cfg = self.cfg
         pop = [f"{n}__top{w}d" for n, (w, _) in cfg.pop_candidates.items()]
-        return [*cfg.direct, *cfg.paths, *pop]
+        return [*cfg.direct, *cfg.paths, *cfg.dense, *pop]
 
     def _before(self, name: str, t: pd.Timestamp, window_days: float | None = None):
         return self._at(
@@ -304,6 +315,10 @@ class PairBuilder:
             top = _keep_top_per_row(scores, path.n).tocoo()
             cands.append((name, pd.DataFrame({SEED: idx[top.row], DST: dst_values[top.col]})))
 
+        for name, src in cfg.dense.items():
+            r, d, _ = self.dense[name].search(srcs, t, src.n, inclusive=cfg._inclusive)
+            cands.append((name, pd.DataFrame({SEED: idx[r], DST: d})))
+
         pop_counts = {
             name: self._at(t, ("pop", name), lambda n=name: self._pop(n, t))
             for name in cfg.popularity
@@ -343,12 +358,46 @@ class PairBuilder:
             pairs[f"{name}__score"] = np.round(vals, 12)
             rank = pairs.groupby(SEED)[f"{name}__score"].rank(ascending=False, method="min")
             pairs[f"{name}__rank"] = rank.where(pairs[f"{name}__score"] > 0)
+        for name in cfg.dense:
+            score = self.dense[name].cosine(
+                pairs[SRC].to_numpy(),
+                pairs[DST].to_numpy(),
+                np.full(len(pairs), np.datetime64(t, "ns")),
+                inclusive=cfg._inclusive,
+            )
+            pairs[f"{name}__score"] = score
+            rank = pairs.groupby(SEED)[f"{name}__score"].rank(ascending=False, method="min")
+            pairs[f"{name}__rank"] = rank.where(rank <= cfg.dense[name].n)
+        for name, edge in cfg.overlaps.items():
+            shared, union = self._overlap(edge, t, pairs[SRC].to_numpy(), pairs[DST].to_numpy())
+            pairs[f"{name}__shared"] = shared
+            pairs[f"{name}__jaccard"] = np.divide(
+                shared, union, out=np.zeros_like(shared), where=union > 0
+            )
         for name, pc in pop_counts.items():
             pairs = pairs.merge(pc, left_on=DST, right_index=True, how="left")
             count_cols = [c for c in pc.columns if "__pop_days" not in c]
             pairs[count_cols] = pairs[count_cols].fillna(0.0)
         pairs["n_candidates"] = pairs.groupby(SEED)[DST].transform("size").astype(float)
         return pairs.drop(columns=[SRC])
+
+    def _overlap(self, edge: str, t: pd.Timestamp, src: np.ndarray, dst: np.ndarray):
+        """Per pair: tokens shared by ``src`` and ``dst`` in edge set ``edge`` before ``t``,
+        and the size of the union of their token sets."""
+        e = self._before(edge, t)
+        nodes = np.unique(np.concatenate([src, dst]).astype(np.int64))
+        e = e[e[SRC].isin(nodes)].drop_duplicates([SRC, DST])
+        n_tok = np.zeros(len(src))
+        if len(e) == 0:
+            return n_tok, n_tok.copy()
+        rows = _positions(pd.Index(nodes), e[SRC].to_numpy())
+        toks, cols = np.unique(e[DST].to_numpy().astype(str), return_inverse=True)
+        m = sp.csr_matrix((np.ones(len(e)), (rows, cols)), shape=(len(nodes), len(toks))).tocsr()
+        size = np.asarray(m.sum(axis=1)).ravel()
+        ps = np.searchsorted(nodes, src.astype(np.int64))
+        pd_ = np.searchsorted(nodes, dst.astype(np.int64))
+        shared = np.asarray(m[ps].multiply(m[pd_]).sum(axis=1)).ravel()
+        return shared, size[ps] + size[pd_] - shared
 
     def _pop(self, name: str, t: pd.Timestamp) -> pd.DataFrame:
         e = self._before(name, t)
