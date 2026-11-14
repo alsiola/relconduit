@@ -9,6 +9,10 @@ candidates and features (``../cand-lgbm-ranker/run.py``):
 * ``ablation``: the baseline plus each new source of :data:`relconduit.trial_edges.NEW_PATHS`
   on its own, and all of them together, each at 25k train seed rows, 3 seeds. Every candidate
   set gets its own real-database pair leakage check before any fit.
+* ``run2``: run 1's winner (``geo``: zip and state walks) and sharper locality on top of it:
+  the city walk keyed on city within country (``city_country``), a zip-prefix region
+  (``zip3``), both, and both with wider walks; then a ranker grid on the best set. 25k train
+  seed rows, as run 1's curve was flat from 25k to all 669k rows.
 
 Every other option of :func:`relconduit.link_search.main` passes through (``--smoke``,
 ``--work-dir``, ``--pairs-dir``, ``--test``).
@@ -59,6 +63,38 @@ VARIANTS = {
     "all": plus(*NEW_PATHS, pop_windows=(90, 365, 730, 1825)),
 }
 
+
+def geo_plus(*names: str, city_country: bool = False, wide: bool = False):
+    """``geo`` with more sources; ``city_country`` swaps the city walk for its homonym-free
+    key; ``wide`` keeps more candidates from each place walk."""
+    paths = {**base.LINK.paths, "zip": NEW_PATHS["zip"], "state": NEW_PATHS["state"]}
+    if city_country:
+        del paths["city"]
+        paths["city_country"] = NEW_PATHS["city_country"]
+    paths.update({n: NEW_PATHS[n] for n in names})
+    if wide:
+        grow = {"city": 80, "city_country": 80, "zip": 60, "state": 60, "country": 50, "zip3": 60}
+        paths = {k: replace(v, n=grow[k]) if k in grow else v for k, v in paths.items()}
+    return replace(base.LINK, edges=EDGES, paths=paths)
+
+
+RUN2_VARIANTS = {
+    "geo": VARIANTS["geo"],
+    "geo_cc": geo_plus(city_country=True),
+    "geo_zip3": geo_plus("zip3"),
+    "geo_loc": geo_plus("zip3", city_country=True),
+    "geo_loc_wide": geo_plus("zip3", city_country=True, wide=True),
+}
+RUN2_GRID = [
+    REF,
+    {**REF, "num_leaves": 127, "min_child_samples": 50},
+    {**REF, "num_leaves": 255, "min_child_samples": 100},
+    {**REF, "learning_rate": 0.02},
+    {**REF, "feature_fraction": 0.5},
+    {**REF, "objective": "rank_xendcg"},
+    {**REF, "objective": "binary"},
+]
+
 PLANS = {
     "curve": SearchPlan(
         variants={"base": base.LINK},
@@ -76,6 +112,18 @@ PLANS = {
         variants=VARIANTS,
         ref_config=REF,
         grid=[REF],
+        stage1_rows=25_000,
+        train_sizes=(),
+        tune_seeds=(0, 1, 2),
+        final_seeds=(0, 1, 2),
+        chunk_rows=3_000,
+        workers=4,
+        prebuild="stage1",
+    ),
+    "run2": SearchPlan(
+        variants=RUN2_VARIANTS,
+        ref_config=REF,
+        grid=RUN2_GRID,
         stage1_rows=25_000,
         train_sizes=(),
         tune_seeds=(0, 1, 2),

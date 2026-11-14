@@ -8,6 +8,8 @@ from does. Static tables (``facilities``, ``sponsors``) are dated :data:`relcond
 * :func:`ran`: facility -> sponsor of a study at the facility (the task's own relation).
 * :func:`sponsor_trials`: study -> sponsor.
 * :func:`place`: facility -> one of its static columns (city, zip, state, country).
+* :func:`place_key`: facility -> a key made from its static columns (city within country, a
+  zip prefix within country).
 * :func:`cosponsor`: sponsor -> another sponsor of one of its studies.
 * :func:`fac_condition`, :func:`spon_condition`: facility / sponsor -> a condition one of its
   studies is on.
@@ -15,7 +17,9 @@ from does. Static tables (``facilities``, ``sponsors``) are dated :data:`relcond
 
 from __future__ import annotations
 
-from relconduit.link import Path, join_edges, reverse_edges, table_edges
+import pandas as pd
+
+from relconduit.link import NEVER, Path, _frame, join_edges, reverse_edges, table_edges
 
 
 def ran(db):
@@ -38,6 +42,31 @@ def place(col: str):
 
     edges.__name__ = f"place_{col}"
     return edges
+
+
+def place_key(name: str, key):
+    """facility -> ``key(facilities)``, a string per facility (``None``/NaN: no edge)."""
+
+    def edges(db):
+        f = db.table_dict["facilities"].df
+        k = pd.Series(key(f), index=f.index)
+        ok = k.notna()
+        return _frame(f.loc[ok, "facility_id"].to_numpy(), k[ok].to_numpy(), NEVER)
+
+    edges.__name__ = f"place_{name}"
+    return edges
+
+
+def city_country(f: pd.DataFrame) -> pd.Series:
+    """The city within its country, so Paris, France and Paris, Texas differ."""
+    return (f["city"].astype(str) + "|" + f["country"].astype(str)).where(f["city"].notna())
+
+
+def zip3(f: pd.DataFrame) -> pd.Series:
+    """The first three characters of the zip within the country (a US zip3 is a region
+    between city and state)."""
+    z = f["zip"].astype(str).str.strip().str[:3]
+    return (z + "|" + f["country"].astype(str)).where(f["zip"].notna() & (z.str.len() == 3))
 
 
 def cosponsor(db):
@@ -71,6 +100,8 @@ EDGES = {
     "state": place("state"),
     "country": place("country"),
     "name": place("name"),
+    "city_country": place_key("city_country", city_country),
+    "zip3": place_key("zip3", zip3),
     "cosponsor": cosponsor,
     "fac_condition": fac_condition,
     "spon_condition": spon_condition,
@@ -89,4 +120,8 @@ NEW_PATHS = {
     "state": Path(("state", "~state", "ran"), n=30, window_days=730, max_fanout=5000),
     # Sponsors that opened a site in the same city in the last year.
     "city_recent": Path(("city", "~city", "ran"), n=50, window_days=(None, None, 365)),
+    # Run 2 (geo did best in run 1): the city walk without cross-country homonyms, and a
+    # zip-prefix region between city and state.
+    "city_country": Path(("city_country", "~city_country", "ran"), n=50, half_life_days=730),
+    "zip3": Path(("zip3", "~zip3", "ran"), n=30, half_life_days=730, max_fanout=5000),
 }

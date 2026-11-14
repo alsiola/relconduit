@@ -12,7 +12,16 @@ import pytest
 from relbench.base import Database, Table
 
 from relconduit.link import NEVER, LinkConfig, build_pairs, pair_leakage_mismatches
-from relconduit.trial_edges import EDGES, NEW_PATHS, cosponsor, fac_condition, ran, spon_condition
+from relconduit.trial_edges import (
+    EDGES,
+    NEW_PATHS,
+    city_country,
+    cosponsor,
+    fac_condition,
+    ran,
+    spon_condition,
+    zip3,
+)
 
 D = pd.Timestamp
 T = D("2020-01-01")
@@ -26,7 +35,7 @@ def trial_db() -> Database:
             "facility_id": [0, 1, 2, 3, 4],
             "name": ["a", "b", "c", "d", "e"],
             "city": ["A", "A", "B", "B", "A"],
-            "zip": ["Z1", "Z1", "Z2", "Z2", "Z1"],
+            "zip": ["Z1001", "Z1001", "Z2001", "Z2002", "Z1001"],
             "state": ["S1", "S1", "S1", "S2", "S1"],
             "country": ["C"] * 5,
         }
@@ -126,9 +135,28 @@ def test_new_sources_reach_what_they_should():
     assert got("cosponsor", 0) == {0, 1}
     # Site 1 ran a study on condition 0, which sponsors 0, 1, 2 have studies on before T.
     assert got("condition", 1) == {0, 1, 2}
-    # Site 4 (cold) shares zip Z1 with sites 0 and 1.
+    # Site 4 (cold) shares zip Z1001 with sites 0 and 1.
     assert got("zip", 4) == {0, 1, 2}
     # Site 3 is alone in state S2 and has no study before T: nothing.
     assert got("state", 3) == set()
     # City A, last 365 days before T: studies 0 (2019-01-01) and 1 (2019-06-01).
     assert got("city_recent", 4) == {0, 1, 2}
+    # The same through city A within country C.
+    assert got("city_country", 4) == {0, 1, 2}
+    # Site 3 (cold, zip Z2002) shares the prefix Z20 with site 2, whose study before T is
+    # study 0 (sponsors 0 and 1); its study 3 is after T.
+    assert got("zip3", 3) == {0, 1}
+
+
+def test_place_keys_split_homonyms_and_skip_short_zips():
+    f = pd.DataFrame(
+        {
+            "city": ["Paris", "Paris", None],
+            "zip": ["75001", "75201", "9"],
+            "country": ["France", "United States", "X"],
+        }
+    )
+    cc = city_country(f)
+    assert cc[0] != cc[1] and pd.isna(cc[2])
+    z = zip3(f)
+    assert list(z[:2]) == ["750|France", "752|United States"] and pd.isna(z[2])
