@@ -1,7 +1,8 @@
-# Recommendation board, wave 1 (issue 12)
+# Recommendation board (issues 12, 20 and 21)
 
-Every link-prediction (recommendation) task in RelBench 3.x except rel-amazon's and rel-hm's, which come in a later
-wave. rel-event has no recommendation task in 3.x. The official metric is MAP@k throughout (`task.evaluate`).
+All ten link-prediction (recommendation) tasks in RelBench 3.x, the whole recommendation family that `relbench.submit`
+packages. Wave 1 (issue 12) covered six; issue 20 pushed two of them further; wave 2 (issue 21) added rel-amazon's three
+and rel-hm's one. rel-event has no recommendation task in 3.x. The official metric is MAP@k throughout (`task.evaluate`).
 
 ## Tasks
 
@@ -13,10 +14,10 @@ wave. rel-event has no recommendation task in 3.x. The official metric is MAP@k 
 | rel-avito/user-ad-visit | `UserInfo.UserID` → `AdsInfo.AdID` | 12 | 4 d | 86,616 | 29,979 | 36,129 | 29.27 | 1 |
 | rel-stack/user-post-comment | `users.UserId` → `posts.PostId` | 100 | 91 d | 21,240 | 825 | 758 | 1.94 | 1 |
 | rel-stack/post-post-related | `posts.PostId` → `posts.postLinksIdList` | 100 | 91 d | 5,855 | 226 | 258 | 1.3 | 1 |
-| rel-amazon/user-item-purchase | `customer.customer_id` → `product.product_id` | 10 | 91 d | 5,112,803 | 351,876 | 393,985 | 2.28 | later |
-| rel-amazon/user-item-rate | `customer.customer_id` → `product.product_id` | 10 | 91 d | 3,667,157 | 257,939 | 292,609 | 2.01 | later |
-| rel-amazon/user-item-review | `customer.customer_id` → `product.product_id` | 10 | 91 d | 2,324,177 | 116,970 | 127,021 | 2.3 | later |
-| rel-hm/user-item-purchase | `customer.customer_id` → `article.article_id` | 12 | 7 d | 3,878,451 | 74,575 | 67,144 | 3.18 | later |
+| rel-amazon/user-item-purchase | `customer.customer_id` → `product.product_id` | 10 | 91 d | 5,112,803 | 351,876 | 393,985 | 2.28 | 2 |
+| rel-amazon/user-item-rate | `customer.customer_id` → `product.product_id` | 10 | 91 d | 3,667,157 | 257,939 | 292,609 | 2.01 | 2 |
+| rel-amazon/user-item-review | `customer.customer_id` → `product.product_id` | 10 | 91 d | 2,324,177 | 116,970 | 127,021 | 2.3 | 2 |
+| rel-hm/user-item-purchase | `customer.customer_id` → `article.article_id` | 12 | 7 d | 3,878,451 | 74,575 | 67,144 | 3.18 | 2 |
 
 Rows are the task tables' rows: one per (src entity, seed time), with a list of true destinations.
 
@@ -30,27 +31,48 @@ Rows are the task tables' rows: one per (src entity, seed time), with a list of 
 - `experiments/<dataset>/baselines/README.md`: upstream trivial and LightGBM baselines reproduced.
 - `cloud_jobs.py`: the cloud driver. `baseline_rows.py` appends the baseline rows from its checkpoint.
 
-## Results (test MAP@k, 3 seeds, mean ± std)
+## Results: all ten tasks (test MAP@k, 3 seeds, mean ± std)
 
-| task | cand-lgbm-ranker | leader (Kapso) | ID-GNN | GNN | past visit | LightGBM, published | LightGBM, ours | verdict |
+Our best approach per task, chosen on val, against the leaderboard. Leaderboard values are from the raw
+`leaderboard.json` (`stanford-star/relbench`, `leaderboard/`; wave 1 read 2026-11-13, wave 2 2026-11-14). RT-J has no
+recommendation entries there.
+
+| task | ours | approach | leader (Kapso) | next best published | ID-GNN | GNN | past visit | verdict |
 |---|---|---|---|---|---|---|---|---|
-| rel-f1 driver-circuit-compete | **.8727 ± .0055** | .8795 | .6232 | .2069 | .1839 | .5956 | .6438 ± .0522 | 2nd, .007 below the leader (about 1.2 std) |
-| rel-trial condition-sponsor-run | **.1221 ± .0008** | .1228 | .0033 | .0350 | .0830 | .0480 | .0709 ± .0031 | tie with the leader (.0007 gap, inside the seed std) |
-| rel-trial site-sponsor-run | **.2834 ± .0008** | .3333 | .0014 | .1059 | .1734 | .0904 | .1664 ± .0149 | 2nd, .050 below the leader |
-| rel-avito user-ad-visit | **.0403 ± .0001** | .0420 | .0363 | .0363 | .0193 | .0006 | .0141 ± .0004 | 2nd, .0017 below the leader |
-| rel-stack user-post-comment | **.1330 ± .0023** | .1313 | .1303 | .0004 | .0138 | .0002 | .0086 ± .0042 | tie with the leader (+.0017, inside the seed std, not a win) |
-| rel-stack post-post-related | **.1993 ± .0047** | .2178 | .1075 | .0012 | .0174 | .0168 | .0130 ± .0094 | 2nd, .019 below the leader |
+| rel-f1 driver-circuit-compete | .8727 ± .0055 | cand-lgbm-ranker | .8795 | GelGT .7456 | .6232 | .2069 | .1839 | 2nd, .007 below (about 1.2 std) |
+| rel-trial condition-sponsor-run | .1223 ± .0030 | cand-lgbm-ranker-plus | .1228 | LEDGER .0598 | .0033 | .0350 | .0830 | tie (.0005 gap, inside the seed std) |
+| rel-trial site-sponsor-run | .2834 ± .0008 | cand-lgbm-ranker | .3333 | LEDGER .1133 | .0014 | .1059 | .1734 | 2nd, .050 below |
+| rel-avito user-ad-visit | .0403 ± .0001 | cand-lgbm-ranker | .0420 | ID-GNN .0363 | .0363 | .0363 | .0193 | 2nd, .0017 below |
+| rel-stack user-post-comment | **.1363 ± .0010** | cand-lgbm-ranker-plus | .1313 | ID-GNN .1303 | .1303 | .0004 | .0138 | **1st**, +.0050 (5 std) |
+| rel-stack post-post-related | .1993 ± .0047 | cand-lgbm-ranker | .2178 | ID-GNN .1075 | .1075 | .0012 | .0174 | 2nd, .019 below |
+| rel-amazon user-item-purchase | **.0288 ± .0001** | cand-lgbm-ranker | .0254 | LEDGER .0113 | .0010 | .0082 | .0006 | **1st**, +.0034 (about 50 std) |
+| rel-amazon user-item-rate | **.0320 ± .0000** | cand-lgbm-ranker | .0231 | LEDGER .0117 | .0012 | .0079 | .0007 | **1st**, +.0089 |
+| rel-amazon user-item-review | .0256 ± .0001 | cand-lgbm-ranker | .0295 | LEDGER .0079 | .0009 | .0044 | .0004 | 2nd, .0039 below |
+| rel-hm user-item-purchase | **.0329 ± .0002** | cand-lgbm-ranker | .0326 | ID-GNN .0281 | .0281 | .0082 | .0089 | 1st by a hair, +.0003 (about 2 std) |
 
-Leaderboard values are from the raw `leaderboard.json` (2026-11-13). RT-J has no recommendation entries there.
-The ranker beats every published baseline and both GNNs on all six tasks. It ties the leader on two and is second on
-the other four. That is no state-of-the-art claim. Val numbers, candidate recall and the grids are in each experiment
-README. Rows are in `results/<dataset>/<task>.jsonl`.
+So on test, with the official evaluation: above every leaderboard entry on four tasks (rel-stack user-post-comment and
+rel-amazon purchase and rate clearly, rel-hm purchase narrowly), a tie on one, second on five. Nothing is submitted yet;
+the family's seed-0 tables wait for the submission issue. Ours beats every published baseline and both GNNs on all ten.
+Val numbers, candidate recall and the grids are in each experiment README. Rows are in `results/<dataset>/<task>.jsonl`.
+
+### Wave 1 detail (issue 12)
+
+| task | cand-lgbm-ranker | LightGBM, published | LightGBM, ours |
+|---|---|---|---|
+| rel-f1 driver-circuit-compete | .8727 ± .0055 | .5956 | .6438 ± .0522 |
+| rel-trial condition-sponsor-run | .1221 ± .0008 | .0480 | .0709 ± .0031 |
+| rel-trial site-sponsor-run | .2834 ± .0008 | .0904 | .1664 ± .0149 |
+| rel-avito user-ad-visit | .0403 ± .0001 | .0006 | .0141 ± .0004 |
+| rel-stack user-post-comment | .1330 ± .0023 | .0002 | .0086 ± .0042 |
+| rel-stack post-post-related | .1993 ± .0047 | .0168 | .0130 ± .0094 |
 
 The trivial baselines reproduce the published values, except rel-f1 past visit (.255 against .184; see
 `experiments/rel-f1/baselines/README.md`). Upstream's current LightGBM script beats its own published row on four tasks,
 because it now has past-visit and popularity label features. Details are in each dataset's baselines README.
 
 ## Runs and cost
+
+### Wave 1 (issue 12)
 
 All on Google Cloud Spot in europe-west2, through `uv run cloud-run`, under the issue's $8 approval.
 
@@ -65,6 +87,27 @@ Per-job runtimes (from each job's `done.json`): rankers 2 min (rel-f1) to 41 min
 Upstream LightGBM took 2–204 min per seed, and rel-avito, at 156–204 min per seed with about 30 GB peak, was the
 slowest. Mac use was about 17 min of CPU for development and smoke tests on 150–300 seed samples.
 
+### Wave 2 (issue 21)
+
+All on Google Cloud Spot in europe-west2, through `uv run cloud-run` with `experiments/rec-board/cloud21.py`, under the
+issue's $10 approval. The four rankers ran side by side, 6 threads each; the trivial baselines on 1 thread beside them.
+
+| run | machine | hours | cost | what it finished |
+|---|---|---|---|---|
+| 1 (709a569) | n2-custom-24-65536 | 0.14 | $0.05 | smoke: all four rankers on 200 seeds, leakage checks (0 mismatches), peak RSS |
+| 2 (1ae6b3e) | n2-custom-24-131072 | 0.60 | $0.25 | the four trivial baselines; stopped: pair building too slow (a full lexsort in the walks' top-k) |
+| 3 (24f32f5) | n2-custom-24-131072 | 0.08 | $0.04 | nothing; stopped: an `IndexError` in the new top-k on empty rows |
+| 4 (e3e3f0e) | n2-custom-24-131072 | 2.03 | $0.85 | smoke again, then all four rankers: 3-config grid, 3 seeds, test once |
+| **total** | | 2.85 | **$1.19** | |
+
+Per-ranker runtimes in run 4: 73 min (rel-hm) to 112 min (amazon purchase), peak RSS 25–35 GB each. The trivial
+baselines took 2–6 min each. Mac use was about 18 min of CPU for development and a rel-hm smoke. Each run's ledger push
+failed inside the task (no `os` credential helper), so each was recorded with `uv run costs add`.
+
+The trivial baselines: global popularity reproduces the published values exactly on all four. Past visit comes out a
+little lower than published (amazon purchase .00058 against .00063, rate .00070 against .00074, review .00035 against
+.00042, hm .0079 against .0089); both are far below everything else on the board.
+
 ## Reproduce
 
 ```sh
@@ -72,6 +115,15 @@ uv run cloud-run --issue 12 --approved <comment> --machine n2-custom-24-196608 -
     --checkpoint runs/cloud12 --run rec-wave1 -- \
     uv run python experiments/rec-board/cloud_jobs.py --out runs/cloud12
 uv run python experiments/rec-board/baseline_rows.py --out runs/cloud12 --commit <sha> --machine "<machine>"
+
+# wave 2
+uv run cloud-run --issue 21 --approved <comment> --machine n2-custom-24-131072 --disk 300 --hours 6 \
+    --checkpoint runs/cloud21 --run wave2 --download runs/cloud21 -- \
+    uv run python experiments/rec-board/cloud21.py --out runs/cloud21 --threads 6 --free-gb 30 --heartbeat 5
+cat runs/cloud21/ranker_<ds>_<task>/rows.jsonl >> results/<ds>/<task>.jsonl
+uv run python experiments/rec-board/baseline_rows.py --out runs/cloud21 --only trivial --commit <sha> \
+    --machine "<machine>" --tasks rel-amazon/user-item-purchase rel-amazon/user-item-rate \
+    rel-amazon/user-item-review rel-hm/user-item-purchase
 ```
 
 Each ranker also runs on its own: `uv run python experiments/<dataset>/<task>/cand-lgbm-ranker/run.py --test`.
