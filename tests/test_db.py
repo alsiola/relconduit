@@ -155,3 +155,31 @@ def test_no_leakage_on_a_sample_of_rel_hm_item_sales():
     cols = {c for _, c, *_ in bad}
     assert any(c.startswith("transactions__") for c in cols)
     assert any(c.startswith("transactions.customer_id>transactions") for c in cols)
+
+
+def test_text_lengths_row_for_row(tmp_path):
+    n = 1_200
+    rng = np.random.default_rng(1)
+    texts = [None if i % 7 == 0 else "é" * int(rng.integers(0, 600)) for i in range(n)]
+    events = pd.DataFrame(
+        {
+            "time": pd.Timestamp("2020-01-01") + pd.to_timedelta(rng.integers(0, 400, n), "D"),
+            "user_id": rng.integers(0, 50, n),
+            "body": texts,
+        }
+    )
+    events.to_parquet(tmp_path / "events.parquet", row_group_size=100)
+    users = pd.DataFrame({"user_id": np.arange(50)})
+    users.to_parquet(tmp_path / "users.parquet")
+    cutoff = D("2020-09-01")
+    db, left_out = load_tables(
+        tmp_path, TABLES, cutoff, max_categories=10, text_lengths={"events": ["body"]}
+    )
+    got = db.table_dict["events"].df
+    assert left_out["events"] == ["body"]  # the text itself is still left out
+    want = events[events["time"] <= cutoff].reset_index(drop=True)
+    assert (got["time"].to_numpy() == want["time"].to_numpy()).all()
+    lens = (
+        want["body"].map(lambda s: len(s) if isinstance(s, str) else np.nan).to_numpy(dtype=float)
+    )
+    np.testing.assert_array_equal(got["body_len"].to_numpy(dtype=float), lens)  # characters

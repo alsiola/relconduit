@@ -223,3 +223,68 @@ def test_windows_and_half_lives_keep_static_edges():
     # User 1 shares city x with user 0, who visited items 0 and 1 before 2020-06-01.
     assert p.loc[0, "windowed__score"] > 0 and p.loc[1, "windowed__score"] > 0
     assert p.loc[0, "decayed__score"] > 0
+
+
+def test_chunked_builds_match_one_build_and_reuse_per_time_work():
+    """Building seeds in chunks (the same seed time split up, as relconduit.link_big does)
+    gives the same pairs as one build; the per-time cache must not carry across times."""
+    from relconduit.link import PairBuilder
+
+    db = tiny_db()
+    seeds = pd.DataFrame(
+        {
+            "user_id": [0, 1, 2, 0, 1, 2, 2, 0],
+            "time": [D("2020-06-01")] * 3 + [D("2020-04-15")] * 3 + [D("2020-06-01")] * 2,
+        }
+    )
+    whole = build_pairs(db, seeds, "user_id", "time", config())
+    b = PairBuilder(db, config())
+    parts = []
+    for idx in ([0, 1], [2], [3, 4, 5], [6, 7]):  # times interleave: the cache resets
+        sub = seeds.iloc[idx].reset_index(drop=True)
+        p = b.build(sub, "user_id", "time")
+        p[SEED] = np.asarray(idx)[p[SEED].to_numpy()]
+        parts.append(p)
+    chunked = pd.concat(parts, ignore_index=True).sort_values([SEED, DST], kind="mergesort")
+    pd.testing.assert_frame_equal(
+        whole.reset_index(drop=True), chunked.reset_index(drop=True), check_dtype=False
+    )
+
+
+def test_unknown_src_walks_nowhere():
+    seeds = pd.DataFrame({"user_id": [99, 0], "time": [D("2020-06-01")] * 2})
+    p = build_pairs(tiny_db(), seeds, "user_id", "time", config())
+    assert (p.loc[p[SEED] == 0, "covisit__score"] == 0).all()  # only popular candidates
+    assert (p.loc[p[SEED] == 1, "covisit__score"] > 0).any()
+
+
+def test_keep_top_per_row_breaks_ties_by_lower_column():
+    import scipy.sparse as sp
+
+    from relconduit.link import _keep_top_per_row
+
+    rows = [
+        [0.0, 0.0, 0.0, 0.0, 0.0],  # empty rows first, between and last
+        [0.5, 0.2, 0.5, 0.0, 0.5],
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.1, 0.0, 0.0, 0.0, 0.0],
+        [0.3, 0.3, 0.3, 0.9, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+    ]
+    m = sp.csr_matrix(np.array(rows))
+    got = _keep_top_per_row(m, 2).toarray()
+    want = np.zeros((6, 5))
+    want[1, [0, 2]] = 0.5
+    want[3, 0] = 0.1
+    want[4, [0, 3]] = [0.3, 0.9]
+    np.testing.assert_array_equal(got, want)
+
+
+def test_tight_beams_cut_walks_and_still_do_not_leak():
+    cfg = replace(
+        config(),
+        paths={"covisit": Path(("visits", "~visits", "visits"), n=1, beam=1, max_fanout=1)},
+    )
+    pairs = build_pairs(tiny_db(), SEEDS, "user_id", "time", cfg)
+    assert (pairs.groupby(SEED)["covisit__score"].apply(lambda s: (s > 0).sum()) <= 1).all()
+    assert pair_leakage_mismatches(tiny_db(), SEEDS, "user_id", "time", cfg) == []

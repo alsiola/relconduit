@@ -172,18 +172,46 @@ def _row_normalise(m: sp.csr_matrix) -> sp.csr_matrix:
 
 
 def _keep_top_per_row(m: sp.csr_matrix, k: int) -> sp.csr_matrix:
-    """Each row's ``k`` largest entries (ties: lower column, i.e. lower node value, first)."""
+    """Each row's ``k`` largest entries (ties: lower column, i.e. lower node value, first).
+
+    Values are compared rounded to 12 decimals, so float noise never decides a tie. Only rows
+    longer than ``k`` are cut, each with a partition (linear) rather than a full sort."""
     m = m.tocsr()
-    m.sum_duplicates()
+    m.sum_duplicates()  # also sorts each row's columns
     lengths = np.diff(m.indptr)
     if lengths.max(initial=0) <= k:
         return m
-    rows = np.repeat(np.arange(m.shape[0]), lengths)
-    order = np.lexsort((m.indices, -np.round(m.data, 12), rows))
-    rank = np.empty_like(order)
-    rank[order] = np.arange(len(order)) - np.repeat(m.indptr[:-1], lengths)[order]
-    keep = rank < k
-    return sp.csr_matrix((m.data[keep], (rows[keep], m.indices[keep])), shape=m.shape).tocsr()
+    keep = np.ones(m.nnz, dtype=bool)
+    vals = np.round(m.data, 12)
+    for r in np.flatnonzero(lengths > k):
+        a, b = m.indptr[r], m.indptr[r + 1]
+        v = vals[a:b]
+        thr = np.partition(v, len(v) - k)[len(v) - k]  # the k-th largest value
+        sel = v > thr
+        ties = np.flatnonzero(v == thr)  # in column order
+        sel[ties[: k - int(sel.sum())]] = True
+        keep[a:b] = sel
+    indptr = np.concatenate([[0], np.cumsum(keep)])[m.indptr]
+    return sp.csr_matrix((m.data[keep], m.indices[keep], indptr), shape=m.shape)
+
+
+def _node_index(arrays) -> pd.Index:
+    """The sorted distinct nodes of ``arrays`` (sorted, so ties break by node value whichever
+    rows the database holds). Integer nodes stay integers, which is much faster on big edge
+    sets; anything else (strings, mixed) is compared as objects."""
+    arrays = [np.asarray(x) for x in arrays]
+    if all(np.issubdtype(x.dtype, np.integer) for x in arrays):
+        return pd.Index(np.unique(np.concatenate(arrays).astype(np.int64)))
+    vals = pd.unique(np.concatenate([x.astype(object) for x in arrays]))
+    return pd.Index(np.sort(vals))
+
+
+def _positions(index: pd.Index, values) -> np.ndarray:
+    """Position of each value in ``index``; -1 where absent."""
+    values = np.asarray(values)
+    if index.dtype == np.int64 and np.issubdtype(values.dtype, np.integer):
+        return index.get_indexer(values.astype(np.int64))
+    return index.get_indexer(values.astype(object))
 
 
 class PairBuilder:
@@ -192,6 +220,18 @@ class PairBuilder:
     def __init__(self, db: Database, config: LinkConfig):
         self.cfg = config
         self.edges = {name: fn(db) for name, fn in config.edges.items()}
+        # Work that depends only on the seed time (filtered edge sets, walk matrices,
+        # popularity), kept for the last seed time seen, so one seed time built in several
+        # chunks of seeds does it once.
+        self._cache_t: pd.Timestamp | None = None
+        self._cache: dict = {}
+
+    def _at(self, t: pd.Timestamp, key, make):
+        if self._cache_t != t:
+            self._cache_t, self._cache = t, {}
+        if key not in self._cache:
+            self._cache[key] = make()
+        return self._cache[key]
 
     def source_names(self) -> list[str]:
         """The candidate sources, in the order of their ``cand__<source>`` columns."""
@@ -200,6 +240,11 @@ class PairBuilder:
         return [*cfg.direct, *cfg.paths, *pop]
 
     def _before(self, name: str, t: pd.Timestamp, window_days: float | None = None):
+        return self._at(
+            t, ("before", name, window_days), lambda: self._filter(name, t, window_days)
+        )
+
+    def _filter(self, name: str, t: pd.Timestamp, window_days: float | None):
         e = self.edges[name]
         mask = (e[T] <= t) if self.cfg._inclusive else (e[T] < t)
         if window_days is not None:  # static rows (NEVER) are always in the window
@@ -208,7 +253,10 @@ class PairBuilder:
 
     def build(self, seeds: pd.DataFrame, src_col: str, time_col: str) -> pd.DataFrame:
         """One row per ``(seed, candidate dst)``: ``seed`` (position in ``seeds``), ``dst`` and
-        the pair features, ordered by seed then dst. Every source's proposals are included."""
+        the pair features, ordered by seed then dst. Every source's proposals are included.
+
+        Each seed's pairs depend only on its own src and seed time (and the database), so
+        building ``seeds`` in chunks and concatenating gives the same rows."""
         parts = []
         times = pd.to_datetime(seeds[time_col]).to_numpy()
         srcs = seeds[src_col].to_numpy().astype(np.int64)
@@ -256,20 +304,14 @@ class PairBuilder:
             top = _keep_top_per_row(scores, path.n).tocoo()
             cands.append((name, pd.DataFrame({SEED: idx[top.row], DST: dst_values[top.col]})))
 
-        pop_counts = {}
-        for name in cfg.popularity:
-            e = self._before(name, t)
-            cols = {}
-            for w in cfg.pop_windows:
-                recent = e[DST][e[T] >= t - pd.Timedelta(days=w)]
-                cols[f"{name}__pop_{w}d"] = recent.value_counts()
-            cols[f"{name}__pop_all"] = e[DST].value_counts()
-            cols[f"{name}__pop_days_since_last"] = (t - e.groupby(DST)[T].max()) / DAY
-            pop_counts[name] = pd.DataFrame(cols)
+        pop_counts = {
+            name: self._at(t, ("pop", name), lambda n=name: self._pop(n, t))
+            for name in cfg.popularity
+        }
         for name, (w, n) in cfg.pop_candidates.items():
-            e = self._before(name, t, window_days=w)
-            vc = e.groupby(DST).size().rename("n").reset_index()
-            vc = vc.sort_values(["n", DST], ascending=[False, True], kind="mergesort").head(n)
+            vc = self._at(
+                t, ("popcand", name, w, n), lambda a=name, b=w, c=n: self._top(a, t, b, c)
+            )
             top = pd.DataFrame(
                 {SEED: np.repeat(idx, len(vc)), DST: np.tile(vc[DST].to_numpy(), len(idx))}
             )
@@ -308,8 +350,36 @@ class PairBuilder:
         pairs["n_candidates"] = pairs.groupby(SEED)[DST].transform("size").astype(float)
         return pairs.drop(columns=[SRC])
 
+    def _pop(self, name: str, t: pd.Timestamp) -> pd.DataFrame:
+        e = self._before(name, t)
+        cols = {}
+        for w in self.cfg.pop_windows:
+            recent = e[DST][e[T] >= t - pd.Timedelta(days=w)]
+            cols[f"{name}__pop_{w}d"] = recent.value_counts()
+        cols[f"{name}__pop_all"] = e[DST].value_counts()
+        cols[f"{name}__pop_days_since_last"] = (t - e.groupby(DST)[T].max()) / DAY
+        return pd.DataFrame(cols)
+
+    def _top(self, name: str, t: pd.Timestamp, w: int, n: int) -> pd.DataFrame:
+        e = self._before(name, t, window_days=w)
+        vc = e.groupby(DST).size().rename("n").reset_index()
+        return vc.sort_values(["n", DST], ascending=[False, True], kind="mergesort").head(n)
+
     def _walk(self, path: Path, t: pd.Timestamp, srcs: np.ndarray):
         """Walk scores, a sparse ``(len(srcs), n dst nodes)`` matrix, and the dst node values."""
+        index, mats, dst_values = self._at(t, ("walk", path), lambda: self._walk_mats(path, t))
+        rows = _positions(index[0], srcs)
+        ok = rows >= 0  # a src with no out-edge in step 0 walks nowhere
+        m = sp.csr_matrix(
+            (np.ones(ok.sum()), (np.flatnonzero(ok), rows[ok])),
+            shape=(len(srcs), len(index[0])),
+        )
+        for mat in mats:
+            m = _keep_top_per_row(m @ mat, path.beam)
+        return m.tocsr(), dst_values
+
+    def _walk_mats(self, path: Path, t: pd.Timestamp):
+        """Per seed time: each node space's index, and each step's row-normalised matrix."""
         steps = []
         windows = path.window_days
         if not isinstance(windows, tuple):
@@ -325,31 +395,24 @@ class PairBuilder:
             else:
                 w = np.ones(len(e))
             steps.append((a.to_numpy(), b.to_numpy(), w))
-        # One node index per position along the walk: the seed srcs and the left ends of step 0,
-        # then each step's right ends together with the next step's left ends.
+        # One node index per position along the walk: the left ends of step 0, then each
+        # step's right ends together with the next step's left ends.
         spaces = []
-        left = [srcs, steps[0][0]]
+        left = [steps[0][0]]
         for i in range(len(steps)):
             right = [steps[i][1]] + ([steps[i + 1][0]] if i + 1 < len(steps) else [])
             spaces.append(left)
             left = right
         spaces.append(left)
-        index = []
-        for arrays in spaces:
-            # Sorted, so ties break by node value whichever rows the database holds.
-            vals = pd.unique(np.concatenate([np.asarray(x, dtype=object) for x in arrays]))
-            index.append(pd.Index(np.sort(vals)))
-        m = sp.csr_matrix(
-            (np.ones(len(srcs)), (np.arange(len(srcs)), index[0].get_indexer(srcs.astype(object)))),
-            shape=(len(srcs), len(index[0])),
-        )
+        index = [_node_index(arrays) for arrays in spaces]
+        mats = []
         for i, (a, b, w) in enumerate(steps):
             mat = sp.csr_matrix(
                 (
                     w,
                     (
-                        index[i].get_indexer(a.astype(object)),
-                        index[i + 1].get_indexer(b.astype(object)),
+                        _positions(index[i], a),
+                        _positions(index[i + 1], b),
                     ),
                 ),
                 shape=(len(index[i]), len(index[i + 1])),
@@ -357,13 +420,13 @@ class PairBuilder:
             mat.sum_duplicates()
             if i > 0:
                 mat = _keep_top_per_row(mat, path.max_fanout)
-            m = _keep_top_per_row(m @ _row_normalise(mat), path.beam)
+            mats.append(_row_normalise(mat).tocsr())
         dst_values = np.asarray(index[-1], dtype=object)
         try:
             dst_values = dst_values.astype(np.int64)
         except (TypeError, ValueError):
             pass
-        return m.tocsr(), dst_values
+        return index, mats, dst_values
 
 
 def build_pairs(
