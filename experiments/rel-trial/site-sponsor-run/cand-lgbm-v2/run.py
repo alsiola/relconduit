@@ -13,6 +13,9 @@ candidates and features (``../cand-lgbm-ranker/run.py``):
   the city walk keyed on city within country (``city_country``), a zip-prefix region
   (``zip3``), both, and both with wider walks; then a ranker grid on the best set. 25k train
   seed rows, as run 1's curve was flat from 25k to all 669k rows.
+* ``final``: run 2's winner (``geo_zip3`` with the reference config), refitted with seeds 0-2,
+  each seed's val and test tables and per-candidate scores saved. The only plan that may run
+  with ``--test``, which scores test once.
 
 Every other option of :func:`relconduit.link_search.main` passes through (``--smoke``,
 ``--work-dir``, ``--pairs-dir``, ``--test``).
@@ -132,14 +135,28 @@ PLANS = {
         workers=4,
         prebuild="stage1",
     ),
+    "final": SearchPlan(
+        variants={"geo_zip3": RUN2_VARIANTS["geo_zip3"]},
+        ref_config=REF,
+        grid=[REF],
+        stage1_rows=25_000,
+        train_sizes=(),
+        tune_seeds=(0, 1, 2),
+        final_seeds=(0, 1, 2),
+        leader=("Kapso", 0.3333),
+        chunk_rows=3_000,
+        workers=4,
+        prebuild="stage1",
+        save_scores=True,
+    ),
 }
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("--plan", choices=sorted(PLANS), required=True)
     a, rest = p.parse_known_args()
-    if "--test" in rest:
-        sys.exit("these plans are val only; the final config gets its own plan")
+    if "--test" in rest and a.plan != "final":
+        sys.exit("only the final plan scores test; the others are val only")
     main(
         "rel-trial",
         "site-sponsor-run",
