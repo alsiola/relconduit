@@ -146,6 +146,14 @@
       "priced": "entered"
     },
     {
+      "at": "2026-11-14T15:46:00Z",
+      "kind": "cloud",
+      "what": "relconduit-29-1a1da3f9106",
+      "issue": "29",
+      "usd": 0.88,
+      "priced": "entered"
+    },
+    {
       "at": "2026-11-14T17:01:41+00:00",
       "kind": "cloud",
       "what": "relconduit-28-1a1dabcffec",
