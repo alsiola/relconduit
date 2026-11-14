@@ -60,10 +60,12 @@ Note (shown on hover):
 | **board mean** | | **0.1782** | | **.1837** | ID-GNN .0933 | -0.0055 |
 
 On the recommendation board (`leaderboard.json`, read 2026-11-14) this would place **2nd of 9**: below Kapso (.1837),
-well above ID-GNN (.0933), LEDGER (.0875), GelGT (.0793) and LightGBM (.0759). It beats Kapso on four tasks (rel-amazon
-purchase and rate, rel-stack user-post-comment, rel-hm purchase) and every other entry on all ten. Not state of the
-art: the board ranks the mean, and Kapso leads it. Seed 0 is not the best seed on every task (on rel-stack
-user-post-comment it is the lowest of five); it was fixed before scoring and is not swapped after.
+well above ID-GNN (.0933), LEDGER (.0875), GelGT (.0793) and LightGBM (.0759). On the submitted seed-0 tables it is above
+Kapso on five tasks: rel-amazon purchase and rate, rel-stack user-post-comment, rel-hm purchase and rel-trial
+condition-sponsor-run. By the seed mean it is four, since condition-sponsor-run (.1223 against .1228) is a tie within
+the seed std. It is above every other entry on all ten. Not state of the art: the board ranks the mean, and Kapso
+leads it. Seed 0 is not the best seed on every task (on rel-stack user-post-comment it is the second lowest of five);
+it was fixed before scoring and is not swapped after.
 
 ## How the two rules are met
 
