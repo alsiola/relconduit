@@ -51,8 +51,9 @@ recommendation entries there.
 | rel-hm user-item-purchase | **.0329 ± .0002** | cand-lgbm-ranker | .0326 | ID-GNN .0281 | .0281 | .0082 | .0089 | 1st by a hair, +.0003 (about 2 std) |
 
 So on test, with the official evaluation: above every leaderboard entry on four tasks (rel-stack user-post-comment and
-rel-amazon purchase and rate clearly, rel-hm purchase narrowly), a tie on one, second on five. Nothing is submitted yet;
-the family's seed-0 tables wait for the submission issue. Ours beats every published baseline and both GNNs on all ten.
+rel-amazon purchase and rate clearly, rel-hm purchase narrowly), a tie on one, second on five. Nothing is submitted yet.
+Issue 22 built and validated the family's package from the seed-0 tables (board mean .1782, which would be 2nd to
+Kapso's .1837): see `SUBMISSION.md`. Ours beats every published baseline and both GNNs on all ten.
 Val numbers, candidate recall and the grids are in each experiment README. Rows are in `results/<dataset>/<task>.jsonl`.
 
 ### Wave 1 detail (issue 12)
