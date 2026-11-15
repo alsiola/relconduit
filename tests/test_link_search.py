@@ -78,3 +78,35 @@ def test_categorical_unifies_string_columns_across_chunks():
     assert isinstance(X["c"].dtype, pd.CategoricalDtype)
     assert set(X["c"].cat.categories) == {"x", "y"}
     assert X["v"].dtype == np.float64 and X["seed"].dtype == np.int64
+
+
+def test_main_records_the_experiment_not_the_plan_work_dir(monkeypatch):
+    """A plan's work directory (``cand-lgbm-v2/final``) must not leak into ``approach``."""
+    import relconduit.link_search as ls
+    from relconduit import results
+
+    seen = {}
+
+    def fake_search(dataset, task, approach, *args, approach_dir, **kwargs):
+        seen["approach_dir"] = approach_dir
+        return {"approach": approach}
+
+    def fake_records(summary, commit, notes=""):
+        return [{"approach": summary["approach"], "notes": notes}]
+
+    rows = []
+    monkeypatch.setattr(ls, "run_search", fake_search)
+    monkeypatch.setattr(ls, "records", fake_records)
+    monkeypatch.setattr(results, "git_commit", lambda: "abc1234")
+    monkeypatch.setattr(results, "append_record", lambda path, row: rows.append((path, row)))
+
+    common = {"plan": None, "src_features": None, "dst_features": None, "argv": ["--test"]}
+    ls.main("rel-x", "t", notes="Plan 'final'.", approach_dir="v2/final", approach="v2", **common)
+    assert seen["approach_dir"] == "v2/final"
+    assert [r["approach"] for _, r in rows] == ["experiments/rel-x/t/v2"]
+    assert rows[0][0] == "results/rel-x/t.jsonl" and rows[0][1]["notes"] == "Plan 'final'."
+
+    rows.clear()
+    ls.main("rel-x", "t", approach_dir="ranker", **common)
+    assert seen["approach_dir"] == "ranker"
+    assert [r["approach"] for _, r in rows] == ["experiments/rel-x/t/ranker"]

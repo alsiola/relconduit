@@ -164,5 +164,7 @@ if __name__ == "__main__":
         base.SRC_FEATURES,
         base.DST_FEATURES,
         argv=rest,
+        notes=f"Plan '{a.plan}' of cand-lgbm-v2/run.py.",
         approach_dir=f"cand-lgbm-v2/{a.plan}",
+        approach="cand-lgbm-v2",
     )
