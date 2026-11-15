@@ -22,6 +22,10 @@ checks yourself before you open or update a PR.
 - RelBench 3.x loads datasets from the Hugging Face Hub (`stanford-star/relbench-v1/<dataset>`) into the HF cache
   (`~/.cache/huggingface`). Never commit datasets, caches, checkpoints or large artefacts
   (`.gitignore` covers the usual ones). Anything over about 1 MB doesn't belong in git.
+- `github.attachment.upload` refuses files over 1 MiB, so don't write issues that ask for a large artefact (a
+  submission zip, a prediction table) to be attached. Ask for it in the cloud bucket instead
+  (`gs://oddsworth-lab-runs/relconduit-<issue>-<run>/...`): the comment gives the path, its size, its `sha256`, and
+  the command that rebuilds it. The bucket deletes everything after 30 days, so the rebuild command is what lasts.
 
 ## Layout
 
