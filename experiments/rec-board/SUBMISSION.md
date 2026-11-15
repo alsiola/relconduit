@@ -55,7 +55,7 @@ Note (shown on hover):
 | task | k | approach | table | submitted | seed mean ± std (seeds) | Kapso (leader) | next best published | submitted vs Kapso |
 |---|---|---|---|---|---|---|---|---|
 | rel-amazon/user-item-purchase | 10 | cand-lgbm-ranker | ensemble | 0.0290 | 0.0288 ± 0.0001 (3) | 0.0254 | LEDGER .0113 | +0.0036 |
-| rel-amazon/user-item-rate | 10 | cand-lgbm-ranker | ensemble | 0.0321 | 0.0320 ± 0.0000 (3) | 0.0231 | LEDGER .0117 | +0.0090 |
+| rel-amazon/user-item-rate | 10 | cand-lgbm-ranker (refit32 seeds) | ensemble | 0.0321 | 0.0321 ± 0.0001 (3) | 0.0231 | LEDGER .0117 | +0.0090 |
 | rel-amazon/user-item-review | 10 | cand-lgbm-ranker | ensemble | 0.0257 | 0.0256 ± 0.0001 (3) | 0.0295 | LEDGER .0079 | -0.0038 |
 | rel-avito/user-ad-visit | 12 | cand-lgbm-ranker | ensemble | 0.0404 | 0.0403 ± 0.0001 (3) | 0.0420 | ID-GNN .0363 | -0.0016 |
 | rel-f1/driver-circuit-compete | 10 | cand-lgbm-ranker | seed 0 | 0.8769 | 0.8727 ± 0.0055 (3) | 0.8795 | GelGT .7456 | -0.0026 |
@@ -107,7 +107,7 @@ The decisions, scored on val only, were committed in 0a15397 before the test pha
 | rel-trial/condition-sponsor-run | 5 | 0.1176 | 0.1171 | 0.1178 | +0.0007 [-0.0002, +0.0015] | 0.94 | ensemble |
 | rel-trial/site-sponsor-run | 3 | 0.2781 | 0.2780 | 0.2785 | +0.0005 [+0.0002, +0.0009] | 1.00 | ensemble |
 
-On test, each of the seven ensemble tables beat its seeds' recorded test mean (by .00008 to .0011), so val's call held on every task.
+On test, each of the seven ensemble tables beat its own seeds' test mean (by .00006 to .0011; for amazon rate those are the refit32 seeds), so val's call held on every task.
 Each final table was scored on test exactly once. The seven ensemble rows are in `results/` under
 `experiments/rec-board/ensemble32 (<approach>)`.
 
