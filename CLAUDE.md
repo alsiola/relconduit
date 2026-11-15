@@ -50,6 +50,9 @@ checks yourself before you open or update a PR.
 - Report the task's official metric, the number of seeds (at least 3 for a reported result), and mean and std.
 - Compare against the published baselines (the RelBench leaderboard and paper) and say where a result sits. Don't claim
   a state-of-the-art result unless it beats the leaderboard on test with the official evaluation.
+- To beat a leaderboard leader, don't plan to study or borrow the leader's code or method: copying it can at best match
+  it. Do original, statistics-led work: measure where the metric is lost (error analysis, ceilings, learning curves),
+  form hypotheses tied to those numbers, and test our own ideas.
 - A negative result is a result. Record it in `results/` and the experiment README just as you would a win.
 
 ## Working an issue
