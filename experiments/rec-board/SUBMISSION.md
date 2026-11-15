@@ -1,7 +1,8 @@
-# Leaderboard submission draft: recommendation family (issues 22 and 32)
+# RelConduit: Candidates + LightGBM Ranker (RelBench recommendation board)
 
-**Nothing has been submitted.** These are the final form values, agreed with the owner on issue 4 (2026-11-15). The
-owner sends the form and uploads the zip; the agents don't submit.
+This is the repro link for our RelBench leaderboard entry on the recommendation board (all 10 tasks). It says what the
+submitted tables are, how to rebuild them, the per-task test numbers with seeds, and how the leaderboard's two rules
+are met. The work was done in issues 22 and 32 of this repo, building on the experiments each row links to.
 
 ## The package
 
@@ -10,10 +11,9 @@ owner sends the form and uploads the zip; the agents don't submit.
   The choice was made on val by a rule fixed before any test scoring (below).
 - `python -m relbench.submit runs/ensemble32/preds --out runs/ensemble32/relconduit.zip` reports the recommendation
   family **validated** (10/10 tasks) and writes `relconduit-recommendation.zip` (27.1 MB, sha256
-  `6ecc5f7ffd7382b6c39513614b4bc38fc44c507aa6ce3275a9a23b521489ade9`).
-  The zip is in the private bucket at `gs://oddsworth-lab-runs/relconduit-32-refit32/package/` (kept 30 days) and on
-  the Mac under `runs/ensemble32/` and `~/relconduit-submission32/`. It and the tables stay out of git. The classification and regression families
-  report FAIL in the same check because this package holds no tables for them.
+  `6ecc5f7ffd7382b6c39513614b4bc38fc44c507aa6ce3275a9a23b521489ade9`). The zip and the tables are not in git; the
+  commands below rebuild them. The classification and regression families report FAIL in the same check because the
+  package holds no tables for them.
 - The leaderboard takes one table per task, with no seeds or mean. Picking the best seed on test would select on test
   labels, which rule 1 forbids. The seed mean ± std is in the Note and below.
 
@@ -25,14 +25,27 @@ uv run python experiments/rec-board/ensemble32.py --phase val       # score seed
 uv run python experiments/rec-board/ensemble32.py --phase test      # write the final tables, score once, validate, zip
 ```
 
-`ensemble32.py` reads two more inputs from `runs/inputs32/`. These are per-candidate score parquets from the
-checkpoints of issues 28 and 29 in `gs://oddsworth-lab-runs`: rel-stack post-post-related `dense_minilm_100_*` and
-rel-trial site-sponsor-run `seed{0,1,2}/*_scores.parquet`. Download them with
-`CLOUDSDK_STORAGE_SLICED_OBJECT_DOWNLOAD_MAX_COMPONENTS=1` (sliced downloads crash gcloud). The test phase does
+`refit32.py` covers eight tasks. For the other two, `ensemble32.py` reads per-candidate val and test scores from
+`runs/inputs32/`, made by those tasks' own experiments:
+
+```sh
+# rel-stack post-post-related (experiments/rel-stack/post-post-related/dense-ranker/README.md; ~2.3 h on 24 vCPUs)
+bash experiments/rel-stack/post-post-related/dense-ranker/cloud29.sh      # MiniLM/BGE embeddings, val ablations
+uv run python experiments/rel-stack/post-post-related/dense-ranker/run.py --final dense_minilm_100 --test
+mkdir -p runs/inputs32/ppr
+cp runs/p29/ablate/scores/dense_minilm_100_{val,test}_scores.parquet runs/inputs32/ppr/
+
+# rel-trial site-sponsor-run (experiments/rel-trial/site-sponsor-run/cand-lgbm-v2/README.md)
+uv run python experiments/rel-trial/site-sponsor-run/cand-lgbm-v2/run.py --plan final --test
+mkdir -p runs/inputs32/ssr
+cp -r runs/rel-trial/site-sponsor-run/cand-lgbm-v2/final/pred/seed{0,1,2} runs/inputs32/ssr/  # {val,test}_scores.parquet
+```
+
+The test phase does
 `package22.py`'s gather and validate step and uses its task `ORDER`. `package22.py` itself is not rerun, because two
 of its sources (post-post-related and site-sponsor-run) now come from newer experiments.
 
-## Form fields
+## Submission form
 
 | field | value |
 |---|---|
@@ -67,17 +80,12 @@ Note (shown on hover):
 | rel-trial/site-sponsor-run | 10 | cand-lgbm-v2/final (issue 28) | ensemble | 0.3048 | 0.3037 ± 0.0009 (3) | 0.3333 | LEDGER .1133 | -0.0285 |
 | **board mean** | | | | **0.1851** | 0.1843 | **.1837** | ID-GNN .0933 | **+0.0014** |
 
-On the recommendation board (`leaderboard.json`, read 2026-11-14), the submitted tables' mean, **.1851**, is above
-Kapso's .1837 by .0014. It would place **1st of 9**, ahead of Kapso, ID-GNN (.0933), LEDGER (.0875), GelGT (.0793) and
+On the recommendation board (`leaderboard/leaderboard.json` on `stanford-star/relbench` main, last read 2026-11-15,
+last changed a5c7130 on 2026-11-12), the submitted tables' mean, **.1851**, is above Kapso's .1837 by .0014. That
+places it **1st of 9**, ahead of Kapso, ID-GNN (.0933), LEDGER (.0875), GelGT (.0793) and
 LightGBM (.0759). The margin is small. From the seed stds, the board mean has a seed-to-seed sd of about .0007, so .0014
 is about two sds. The mean of the seed means, .1843, is only .0006 above Kapso. Kapso publishes one number per task,
 with no spread.
-
-Re-read 2026-11-15 before handoff: `leaderboard/leaderboard.json` on `stanford-star/relbench` main, which the site
-loads live, is unchanged since its last commit (a5c7130, 2026-11-12, a classification entry). Kapso's ten values and
-its .1837 mean are as above, and the open submissions upstream (441, 439, 437, 433) carry no recommendation tables. So
-the position is unchanged: 1st of 9 at .1851. Re-checking `relconduit-recommendation.zip` with
-`python -m relbench.submit` gave the same ten values and mean 18.51%, and the sha256 is unchanged.
 
 The tables beat Kapso on **six** tasks: rel-amazon purchase and rate, rel-hm purchase, rel-stack user-post-comment and
 post-post-related, and rel-trial condition-sponsor-run. By the seed mean the count is **five**: condition-sponsor-run
@@ -176,7 +184,6 @@ The test phase also checks each seed-0 table it submits against its recorded row
 tables (f1, user-post-comment, post-post-related) match.
 
 Refit run: one Google Cloud Spot `n2-custom-24-196608` (europe-west2), eight jobs, at most four side by side at 3
-threads each, after a smoke phase on all eight. The command ran 2.91 h and the machine about 2.95 h, **$1.46** (ledger
-entry `relconduit-32-1a1dca80a5b`, entered by hand because the runner's push to main failed). Per job: rel-f1 0.6 min,
+threads each, after a smoke phase on all eight. The command ran 2.91 h and the machine about 2.95 h, **$1.46**. Per job: rel-f1 0.6 min,
 avito 11 min, hm 66 min, condition-sponsor-run 87 min, amazon review 108 min, user-post-comment 111 min (peak 61 GB),
-amazon purchase 152 min, amazon rate 158 min. Mac: the val and test phases take about a minute each.
+amazon purchase 152 min, amazon rate 158 min. The val and test phases take about a minute each on an Apple Silicon laptop.
