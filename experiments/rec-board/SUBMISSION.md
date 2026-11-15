@@ -25,10 +25,23 @@ uv run python experiments/rec-board/ensemble32.py --phase val       # score seed
 uv run python experiments/rec-board/ensemble32.py --phase test      # write the final tables, score once, validate, zip
 ```
 
-`ensemble32.py` reads two more inputs from `runs/inputs32/`. These are per-candidate score parquets from the
-checkpoints of issues 28 and 29 in `gs://oddsworth-lab-runs`: rel-stack post-post-related `dense_minilm_100_*` and
-rel-trial site-sponsor-run `seed{0,1,2}/*_scores.parquet`. Download them with
-`CLOUDSDK_STORAGE_SLICED_OBJECT_DOWNLOAD_MAX_COMPONENTS=1` (sliced downloads crash gcloud). The test phase does
+`refit32.py` covers eight tasks. For the other two, `ensemble32.py` reads per-candidate val and test scores from
+`runs/inputs32/`, made by those tasks' own experiments:
+
+```sh
+# rel-stack post-post-related (experiments/rel-stack/post-post-related/dense-ranker/README.md; ~2.3 h on 24 vCPUs)
+bash experiments/rel-stack/post-post-related/dense-ranker/cloud29.sh      # MiniLM/BGE embeddings, val ablations
+uv run python experiments/rel-stack/post-post-related/dense-ranker/run.py --final dense_minilm_100 --test
+mkdir -p runs/inputs32/ppr
+cp runs/p29/ablate/scores/dense_minilm_100_{val,test}_scores.parquet runs/inputs32/ppr/
+
+# rel-trial site-sponsor-run (experiments/rel-trial/site-sponsor-run/cand-lgbm-v2/README.md)
+uv run python experiments/rel-trial/site-sponsor-run/cand-lgbm-v2/run.py --plan final --test
+mkdir -p runs/inputs32/ssr
+cp -r runs/rel-trial/site-sponsor-run/cand-lgbm-v2/final/pred/seed{0,1,2} runs/inputs32/ssr/  # {val,test}_scores.parquet
+```
+
+The test phase does
 `package22.py`'s gather and validate step and uses its task `ORDER`. `package22.py` itself is not rerun, because two
 of its sources (post-post-related and site-sponsor-run) now come from newer experiments.
 
