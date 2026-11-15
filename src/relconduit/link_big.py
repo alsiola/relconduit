@@ -263,6 +263,19 @@ def _concat(paths: Sequence[Path], seeds: np.ndarray | None = None) -> pd.DataFr
     return pd.concat(parts, ignore_index=True)
 
 
+def _ensemble_top(models, seeds, paths, cols, n_rows: int, k: int, out_dir, split: str):
+    """Per-seed and rank-averaged top-k tables over the chunk files, saved to ``out_dir``;
+    returns the per-seed tables in ``seeds`` order (as :func:`_predict_top` would)."""
+    from relconduit.ensemble import TopAccumulator
+
+    acc = TopAccumulator(seeds, n_rows, k)
+    for p in paths:
+        X = pd.read_parquet(p, columns=[SEED, DST, *cols])
+        acc.add(X, [m.predict(X[cols]) for m in models])
+    tables = acc.save(out_dir, split)
+    return [tables[f"seed{s}"] for s in seeds]
+
+
 def _predict_top(models, paths, cols, n_rows: int, k: int) -> list[np.ndarray]:
     """Each model's ``(n_rows, k)`` predictions over the chunk files, read once."""
     out = [np.full((n_rows, k), -1, dtype=np.int64) for _ in models]
@@ -285,8 +298,12 @@ def run_big(
     score_test: bool = False,
     smoke_rows: int | None = None,
     leakage_seeds: int = 40,
+    ensemble_dir: str | Path | None = None,
 ) -> dict:
-    """Run the pipeline (see the module doc); returns the summary, also written to
+    """``ensemble_dir``: also write the chosen config's per-seed and rank-averaged top-k
+    tables for val (and test) there (:class:`relconduit.ensemble.TopAccumulator`).
+
+    Run the pipeline (see the module doc); returns the summary, also written to
     ``<work>/summary.json`` (``summary_val.json`` without test, ``summary_smoke.json`` for a
     smoke run, which cuts train and val to ``smoke_rows`` seed rows, the grid to two configs
     and the seeds to one, and never touches test)."""
@@ -521,6 +538,9 @@ def run_big(
             [models[0].feature_name()[i], round(float(gain[i]), 1)] for i in np.argsort(-gain)[:30]
         ],
     }
+    if ensemble_dir is not None:
+        _ensemble_top(models, seeds, val_paths, cols, n_val, k, ensemble_dir, "val")
+        c.log(f"saved val top-k tables for seeds {list(seeds)} and the ensemble")
     if not score_test:
         summary["runtime_minutes"] = (time.time() - t0) / 60
         summary["peak_rss_gb"] = _rss_gb()
@@ -531,7 +551,12 @@ def run_big(
     # --- test, once ---------------------------------------------------------------------------
     test_rows = task.get_table("test").df.reset_index(drop=True)  # masked: src and time only
     test_paths = pairs.build("test", test_rows, labels=False, positive_only=False)
-    preds = _predict_top(models, test_paths, cols, len(test_rows), k)
+    if ensemble_dir is not None:  # the ensemble's test table is written, not scored
+        preds = _ensemble_top(
+            models, seeds, test_paths, cols, len(test_rows), k, ensemble_dir, "test"
+        )
+    else:
+        preds = _predict_top(models, test_paths, cols, len(test_rows), k)
     test_scores = []
     for seed, pred in zip(seeds, preds, strict=True):
         path = work / "pred" / f"seed{seed}" / f"{dataset_name}__{task_name}.csv"

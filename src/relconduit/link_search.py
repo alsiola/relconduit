@@ -89,6 +89,9 @@ class SearchPlan:
     prebuild: str | None = None
     # Keep each final seed's val and test prediction tables and per-candidate scores.
     save_scores: bool = False
+    # Write the final seeds' per-seed and rank-averaged top-k tables for val and test here
+    # (relconduit.ensemble.save_top; test tables are written, not scored).
+    ensemble_dir: str | None = None
 
 
 # --- pure helpers (tested) ---------------------------------------------------------------
@@ -580,6 +583,13 @@ def run_search(
                 path = work / "pred" / f"seed{seed}" / f"{dataset_name}__{task_name}__val.csv"
                 write_prediction_table(task, top_k(Xv, s, len(val_rows), k), path, split="val")
         ctx.log(f"saved val tables and scores for seeds {list(plan.final_seeds)}")
+    if plan.ensemble_dir is not None:
+        from relconduit.ensemble import save_top
+
+        Xv = val_X[variant]
+        vs = {seed: model_for(seed).predict(Xv[cols]) for seed in plan.final_seeds}
+        save_top(plan.ensemble_dir, "val", Xv, vs, len(val_rows), k)
+        ctx.log(f"saved val top-k tables for seeds {list(plan.final_seeds)} and the ensemble")
     train_X.clear()
     summary = {
         "dataset": dataset_name,
@@ -617,9 +627,10 @@ def run_search(
     # --- test, once ---------------------------------------------------------------------------
     test_rows = task.get_table("test").df.reset_index(drop=True)  # masked: src and time only
     X_test = data[variant].split("test", test_rows, positive_only=False)
-    preds, test_scores = [], []
+    preds, test_scores, test_raw = [], [], {}
     for seed in plan.final_seeds:
         s = model_for(seed).predict(X_test[cols])
+        test_raw[seed] = s
         if plan.save_scores:
             save_scores("test", X_test, s, seed)
         pred = top_k(X_test, s, len(test_rows), k)
@@ -630,6 +641,11 @@ def run_search(
         test_scores.append(float(value))
         ctx.log(f"test seed {seed}: {value:.4f}")
     summary["test_scores"] = test_scores
+    if plan.ensemble_dir is not None:
+        from relconduit.ensemble import save_top
+
+        save_top(plan.ensemble_dir, "test", X_test, test_raw, len(test_rows), k)
+        ctx.log("saved test top-k tables (not scored)")
 
     target = task.get_table("test", mask_input_cols=False)
     tdf = target.df.reset_index(drop=True)

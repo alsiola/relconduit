@@ -172,8 +172,12 @@ def run(
     smoke_rows: int | None = None,
     leakage_seeds: int = 40,
     pairs_dir: str | Path | None = None,
+    ensemble_dir: str | Path | None = None,
 ) -> dict:
     """Tune on val; with ``score_test``, then score test once. Returns a summary dict.
+
+    ``ensemble_dir``: also write the chosen config's per-seed and rank-averaged top-k tables
+    for val (and test, with ``score_test``) there (:func:`relconduit.ensemble.save_top`).
 
     ``src_features``/``dst_features`` ``None`` leaves that side's entity features out.
     ``smoke_rows`` cuts train and val to that many seed rows, the grid to one config and the
@@ -365,6 +369,16 @@ def run(
     gain = top.feature_importance(importance_type="gain")
     order = np.argsort(-gain)[:30]
     summary["top_features"] = [[top.feature_name()[i], round(float(gain[i]), 1)] for i in order]
+
+    def best_model(seed: int) -> lgb.Booster:
+        return lgb.Booster(model_file=str(models_dir / f"{_slug(_key(best['config'], seed))}.txt"))
+
+    if ensemble_dir is not None:
+        from relconduit.ensemble import save_top
+
+        vs = {s: best_model(s).predict(X_val[best_model(s).feature_name()]) for s in seeds}
+        save_top(ensemble_dir, "val", X_val, vs, len(tables["val"]), k)
+        print(f"[{_m(t0)}] saved val top-k tables (seeds {list(seeds)} and ensemble)", flush=True)
     if not score_test:
         summary["runtime_minutes"] = (time.time() - t0) / 60
         name = "summary_smoke.json" if smoke_rows else "summary_val.json"
@@ -374,10 +388,11 @@ def run(
     # --- score test once ----------------------------------------------------------------------
     test_rows = task.get_table("test").df  # masked: src and time only
     X_test = split_data("test", test_rows)
-    test_scores = []
+    test_scores, test_raw = [], {}
     for seed in seeds:
-        model = lgb.Booster(model_file=str(models_dir / f"{_slug(_key(best['config'], seed))}.txt"))
+        model = best_model(seed)
         score = model.predict(X_test[model.feature_name()])
+        test_raw[seed] = score
         pred = top_k(X_test, score, len(test_rows), k)
         path = work / "pred" / f"seed{seed}" / f"{dataset_name}__{task_name}.csv"
         write_prediction_table(task, pred, path)
@@ -385,6 +400,11 @@ def run(
         test_scores.append(float(value))
         print(f"[{_m(t0)}] test seed {seed}: {value:.4f}", flush=True)
     summary["test_scores"] = test_scores
+    if ensemble_dir is not None:
+        from relconduit.ensemble import save_top
+
+        save_top(ensemble_dir, "test", X_test, test_raw, len(test_rows), k)
+        print(f"[{_m(t0)}] saved test top-k tables (not scored)", flush=True)
     summary["runtime_minutes"] = (time.time() - t0) / 60
     (work / "summary.json").write_text(json.dumps(summary, indent=2))
     return summary

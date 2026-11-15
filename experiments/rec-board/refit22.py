@@ -130,9 +130,15 @@ def _load(path: Path):
 
 
 def refit_one(
-    name: str, work: Path, pairs: Path, smoke: int | None = None, score_test: bool = True
+    name: str,
+    work: Path,
+    pairs: Path,
+    smoke: int | None = None,
+    score_test: bool = True,
+    ensemble_dir: Path | None = None,
 ) -> dict:
-    """Refit one job in this process; returns its summary."""
+    """Refit one job in this process; returns its summary. ``ensemble_dir`` (issue 32) also
+    keeps the per-seed and rank-averaged top-k tables (:mod:`relconduit.ensemble`)."""
     ds, task = name.split("/")
     job = JOBS[name]
     mod = _load(ROOT / "experiments" / ds / task / job["approach"] / "run.py")
@@ -156,6 +162,7 @@ def refit_one(
             smoke_rows=smoke,
             leakage_seeds=10 if smoke else 40,
             pairs_dir=pairs,
+            ensemble_dir=ensemble_dir,
         )
     from relconduit.link_search import run_search
 
@@ -170,6 +177,7 @@ def refit_one(
         train_sizes=(job["size"],),
         final_seeds=job["seeds"],
         leader=None,  # no verdict or submission check here; the package is checked whole
+        ensemble_dir=None if ensemble_dir is None else str(ensemble_dir),
     )
     return run_search(
         ds,
