@@ -137,8 +137,28 @@ Nothing was chosen between the two runs.
 
 ## Run
 
+Phase 1 scores val with the issue-12 `cand-lgbm-ranker` models (best config, seeds 0–2). They are
+not in git. They are in issue 12's cloud checkpoint (rec-board wave 1, `cloud-run --run rec-wave1
+--checkpoint runs/cloud12`, kept 30 days). Copy them down, then run phase 1 (Mac, about 3 min):
+
 ```sh
-uv run python experiments/rel-trial/site-sponsor-run/cand-lgbm-v2/phase1.py               # phase 1 statistics, Mac
+gcloud storage rsync --recursive \
+    gs://oddsworth-lab-runs/relconduit-12-rec-wave1/runs/cloud12/ranker_rel-trial_site-sponsor-run \
+    runs/i28/base/ranker_rel-trial_site-sponsor-run
+uv run python experiments/rel-trial/site-sponsor-run/cand-lgbm-v2/phase1.py \
+    --models runs/i28/base/ranker_rel-trial_site-sponsor-run/work/rel-trial/site-sponsor-run/cand-lgbm-ranker/models \
+    --out runs/i28/phase1
+```
+
+If the checkpoint has expired, refit the baseline with
+`uv run python experiments/rel-trial/site-sponsor-run/cand-lgbm-ranker/run.py --work-dir runs/i12`
+and pass `--models runs/i12/rel-trial/site-sponsor-run/cand-lgbm-ranker/models`. This is a long run,
+so send it to the cloud. It uses the same configs and seeds, but nobody has checked that it gives
+identical models.
+
+Phase 2 and the final run:
+
+```sh
 uv run python experiments/rel-trial/site-sponsor-run/cand-lgbm-v2/run.py --plan run2 --smoke 150
 uv run python experiments/rel-trial/site-sponsor-run/cand-lgbm-v2/run.py --plan final --test
 ```
@@ -152,3 +172,12 @@ before the real jobs, on a Google Cloud `n2-custom-24-131072` Spot machine (euro
 
 Each final seed's val and test prediction tables and per-candidate scores are in the checkpoint
 `gs://oddsworth-lab-runs/relconduit-28-i28-final/`, not in git.
+
+### Note on the results rows
+
+The two rows for this experiment in `results/rel-trial/site-sponsor-run.jsonl` (val and test,
+commit `318c019`, 2026-11-15) record `approach` as
+`experiments/rel-trial/site-sponsor-run/cand-lgbm-v2/final`. That directory does not exist. Read it
+as this experiment, `cand-lgbm-v2`, plan `final`. `run.py` used the per-plan work directory as the
+approach. It now records `cand-lgbm-v2` and puts the plan in `notes` (issue 34). The rows are not
+rewritten, because `results/` is append-only.

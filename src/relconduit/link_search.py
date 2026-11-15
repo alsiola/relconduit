@@ -753,8 +753,14 @@ def main(
     notes: str = "",
     argv: Sequence[str] | None = None,
     approach_dir: str = "cand-lgbm-ranker-plus",
+    approach: str | None = None,
 ) -> dict:
-    """Command line for an experiment's ``run.py``: ``--smoke``, ``--test``, ``--work-dir``."""
+    """Command line for an experiment's ``run.py``: ``--smoke``, ``--test``, ``--work-dir``.
+
+    ``approach_dir`` names the work directory under ``--work-dir``; ``approach`` is the
+    experiment directory recorded in ``results/`` (default: ``approach_dir``). Keep them apart
+    when one experiment runs several plans in their own work directories.
+    """
     import argparse
 
     from relconduit.results import append_record, git_commit
@@ -766,11 +772,11 @@ def main(
     p.add_argument("--pairs-dir")
     p.add_argument("--n-boot", type=int, default=2000)
     a = p.parse_args(argv)
-    approach = f"experiments/{dataset}/{task}/{approach_dir}"
+    approach_path = f"experiments/{dataset}/{task}/{approach or approach_dir}"
     summary = run_search(
         dataset,
         task,
-        approach + (" (smoke)" if a.smoke else ""),
+        approach_path + (" (smoke)" if a.smoke else ""),
         plan,
         src_features,
         dst_features,
