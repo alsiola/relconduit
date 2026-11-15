@@ -1,0 +1,345 @@
+{
+  "rule": "rank average: mean within-row rank over seeds (ties share their mean rank)",
+  "p_better": 0.9,
+  "n_boot": 2000,
+  "rows": [
+    {
+      "task": "rel-amazon/user-item-purchase",
+      "approach": "experiments/rel-amazon/user-item-purchase/cand-lgbm-ranker",
+      "seeds": 3,
+      "val_rows_scored": 351876,
+      "val_seed": [
+        0.0352349143035256,
+        0.035355435516389803,
+        0.03521197302624939
+      ],
+      "val_seed_recorded": [
+        0.035235,
+        0.035355,
+        0.035226
+      ],
+      "val_seed_max_gap_vs_recorded": 1.402697375060824e-05,
+      "val_seed0": 0.0352349143035256,
+      "val_seed_mean": 0.035267440948721605,
+      "val_ens": 0.03544231866373791,
+      "vs_seed0": {
+        "diff": 0.00020740436021231634,
+        "ci_lo": 0.0001222004970260029,
+        "ci_hi": 0.00029233976194082084,
+        "p_better": 1.0
+      },
+      "vs_seed_mean": {
+        "diff": 0.0001748777150163138,
+        "ci_lo": 0.0001244820571712348,
+        "ci_hi": 0.00022745213492770394,
+        "p_better": 1.0
+      },
+      "use_ensemble": true
+    },
+    {
+      "task": "rel-amazon/user-item-rate",
+      "approach": "experiments/rel-amazon/user-item-rate/cand-lgbm-ranker",
+      "seeds": 3,
+      "val_rows_scored": 257939,
+      "val_seed": [
+        0.03823514886192197,
+        0.038256289350590514,
+        0.03822309818286777
+      ],
+      "val_seed_recorded": [
+        0.038183,
+        0.038065,
+        0.038128
+      ],
+      "val_seed_max_gap_vs_recorded": 0.00019128935059051222,
+      "val_seed0": 0.03823514886192197,
+      "val_seed_mean": 0.03823817879846008,
+      "val_ens": 0.038296708772042526,
+      "vs_seed0": {
+        "diff": 6.155991012056557e-05,
+        "ci_lo": -2.9339196880101267e-05,
+        "ci_hi": 0.00014948620417651215,
+        "p_better": 0.9085
+      },
+      "vs_seed_mean": {
+        "diff": 5.852997358244832e-05,
+        "ci_lo": 6.5253344470904175e-06,
+        "ci_hi": 0.00010864656401786936,
+        "p_better": 0.987
+      },
+      "use_ensemble": true
+    },
+    {
+      "task": "rel-amazon/user-item-review",
+      "approach": "experiments/rel-amazon/user-item-review/cand-lgbm-ranker",
+      "seeds": 3,
+      "val_rows_scored": 116970,
+      "val_seed": [
+        0.030875986901984866,
+        0.03111919323305459,
+        0.030818835503718837
+      ],
+      "val_seed_recorded": [
+        0.030876,
+        0.031119,
+        0.030819
+      ],
+      "val_seed_max_gap_vs_recorded": 1.93233054588543e-07,
+      "val_seed0": 0.030875986901984866,
+      "val_seed_mean": 0.030938005212919433,
+      "val_ens": 0.031075491735740396,
+      "vs_seed0": {
+        "diff": 0.00019950483375552686,
+        "ci_lo": 6.025638833848966e-05,
+        "ci_hi": 0.0003321674944544895,
+        "p_better": 0.9965
+      },
+      "vs_seed_mean": {
+        "diff": 0.00013748652282096296,
+        "ci_lo": 6.149387462060199e-05,
+        "ci_hi": 0.00021710427686677503,
+        "p_better": 1.0
+      },
+      "use_ensemble": true
+    },
+    {
+      "task": "rel-avito/user-ad-visit",
+      "approach": "experiments/rel-avito/user-ad-visit/cand-lgbm-ranker",
+      "seeds": 3,
+      "val_rows_scored": 29979,
+      "val_seed": [
+        0.05771175233847092,
+        0.057736133634620074,
+        0.05761816834117345
+      ],
+      "val_seed_recorded": [
+        0.057712,
+        0.057736,
+        0.057618
+      ],
+      "val_seed_max_gap_vs_recorded": 2.4766152907640393e-07,
+      "val_seed0": 0.05771175233847092,
+      "val_seed_mean": 0.05768868477142148,
+      "val_ens": 0.05776560199574942,
+      "vs_seed0": {
+        "diff": 5.3849657278496874e-05,
+        "ci_lo": -0.00011335814390010851,
+        "ci_hi": 0.00020782970647094948,
+        "p_better": 0.7375
+      },
+      "vs_seed_mean": {
+        "diff": 7.691722432793939e-05,
+        "ci_lo": -1.2428780618721771e-05,
+        "ci_hi": 0.0001665728410333116,
+        "p_better": 0.95
+      },
+      "use_ensemble": true
+    },
+    {
+      "task": "rel-f1/driver-circuit-compete",
+      "approach": "experiments/rel-f1/driver-circuit-compete/cand-lgbm-ranker",
+      "seeds": 3,
+      "val_rows_scored": 27,
+      "val_seed": [
+        0.7346380805408584,
+        0.7230335097001764,
+        0.7380537184009406
+      ],
+      "val_seed_recorded": [
+        0.734638,
+        0.723034,
+        0.738054
+      ],
+      "val_seed_max_gap_vs_recorded": 4.902998235190026e-07,
+      "val_seed0": 0.7346380805408584,
+      "val_seed_mean": 0.7319084362139918,
+      "val_ens": 0.7405581275720164,
+      "vs_seed0": {
+        "diff": 0.005920047031158135,
+        "ci_lo": -0.021406341857730757,
+        "ci_hi": 0.03196116255144024,
+        "p_better": 0.653
+      },
+      "vs_seed_mean": {
+        "diff": 0.00864969135802468,
+        "ci_lo": -0.010358869782480915,
+        "ci_hi": 0.027603156231628425,
+        "p_better": 0.803
+      },
+      "use_ensemble": false
+    },
+    {
+      "task": "rel-hm/user-item-purchase",
+      "approach": "experiments/rel-hm/user-item-purchase/cand-lgbm-ranker",
+      "seeds": 3,
+      "val_rows_scored": 74575,
+      "val_seed": [
+        0.029654428663370206,
+        0.02983172780916888,
+        0.029495546342628874
+      ],
+      "val_seed_recorded": [
+        0.029654,
+        0.029832,
+        0.029496
+      ],
+      "val_seed_max_gap_vs_recorded": 4.5365737112723625e-07,
+      "val_seed0": 0.029654428663370206,
+      "val_seed_mean": 0.029660567605055987,
+      "val_ens": 0.029892357907077217,
+      "vs_seed0": {
+        "diff": 0.00023792924370700597,
+        "ci_lo": 4.022549130009533e-05,
+        "ci_hi": 0.000420466982564488,
+        "p_better": 0.9935
+      },
+      "vs_seed_mean": {
+        "diff": 0.00023179030202122593,
+        "ci_lo": 0.00012845569240415845,
+        "ci_hi": 0.0003438460322763445,
+        "p_better": 1.0
+      },
+      "use_ensemble": true
+    },
+    {
+      "task": "rel-stack/user-post-comment",
+      "approach": "experiments/rel-stack/user-post-comment/cand-lgbm-ranker-plus",
+      "seeds": 5,
+      "val_rows_scored": 825,
+      "val_seed": [
+        0.16542269705520277,
+        0.1636194837832425,
+        0.16555832188840106,
+        0.16342395426073633,
+        0.1633429451693678
+      ],
+      "val_seed_recorded": [
+        0.165423,
+        0.163619,
+        0.165558,
+        0.163424,
+        0.163343
+      ],
+      "val_seed_max_gap_vs_recorded": 4.837832425219624e-07,
+      "val_seed0": 0.16542269705520277,
+      "val_seed_mean": 0.16427348043139006,
+      "val_ens": 0.16456495337332205,
+      "vs_seed0": {
+        "diff": -0.0008577436818807008,
+        "ci_lo": -0.0037735538070177593,
+        "ci_hi": 0.0018950029101495868,
+        "p_better": 0.2705
+      },
+      "vs_seed_mean": {
+        "diff": 0.00029147294193195494,
+        "ci_lo": -0.000946959777127605,
+        "ci_hi": 0.0015746683076543683,
+        "p_better": 0.683
+      },
+      "use_ensemble": false
+    },
+    {
+      "task": "rel-stack/post-post-related",
+      "approach": "experiments/rel-stack/post-post-related/dense-ranker",
+      "seeds": 3,
+      "val_rows_scored": 226,
+      "val_seed": [
+        0.23189954340404334,
+        0.22969048564844086,
+        0.23098588051118893
+      ],
+      "val_seed_recorded": [
+        0.2319,
+        0.22969,
+        0.230986
+      ],
+      "val_seed_max_gap_vs_recorded": 4.85648440851083e-07,
+      "val_seed0": 0.23189954340404334,
+      "val_seed_mean": 0.23085863652122438,
+      "val_ens": 0.22980141270472385,
+      "vs_seed0": {
+        "diff": -0.0020981306993194684,
+        "ci_lo": -0.00919765308232375,
+        "ci_hi": 0.0047438937792578,
+        "p_better": 0.272
+      },
+      "vs_seed_mean": {
+        "diff": -0.0010572238165004954,
+        "ci_lo": -0.004858179563485582,
+        "ci_hi": 0.002947495773677898,
+        "p_better": 0.297
+      },
+      "use_ensemble": false
+    },
+    {
+      "task": "rel-trial/condition-sponsor-run",
+      "approach": "experiments/rel-trial/condition-sponsor-run/cand-lgbm-ranker-plus",
+      "seeds": 5,
+      "val_rows_scored": 2081,
+      "val_seed": [
+        0.11757912913861862,
+        0.11871570300838223,
+        0.11804837691835415,
+        0.11362555343920187,
+        0.11761025349146903
+      ],
+      "val_seed_recorded": [
+        0.117579,
+        0.118716,
+        0.118048,
+        0.113626,
+        0.11761
+      ],
+      "val_seed_max_gap_vs_recorded": 4.4656079813132354e-07,
+      "val_seed0": 0.11757912913861862,
+      "val_seed_mean": 0.11711580319920518,
+      "val_ens": 0.11777833456161756,
+      "vs_seed0": {
+        "diff": 0.00019920542299892862,
+        "ci_lo": -0.0009147341110479113,
+        "ci_hi": 0.0013091545145831654,
+        "p_better": 0.64
+      },
+      "vs_seed_mean": {
+        "diff": 0.0006625313624123723,
+        "ci_lo": -0.00016822586080991118,
+        "ci_hi": 0.0014925104885423295,
+        "p_better": 0.942
+      },
+      "use_ensemble": true
+    },
+    {
+      "task": "rel-trial/site-sponsor-run",
+      "approach": "experiments/rel-trial/site-sponsor-run/cand-lgbm-v2/final",
+      "seeds": 3,
+      "val_rows_scored": 37003,
+      "val_seed": [
+        0.2780866283759333,
+        0.27721793829379543,
+        0.2787312266758866
+      ],
+      "val_seed_recorded": [
+        0.278087,
+        0.277218,
+        0.278731
+      ],
+      "val_seed_max_gap_vs_recorded": 3.7162406668622694e-07,
+      "val_seed0": 0.2780866283759333,
+      "val_seed_mean": 0.2780119311152051,
+      "val_ens": 0.2785357316290337,
+      "vs_seed0": {
+        "diff": 0.0004491032531004837,
+        "ci_lo": -6.52187557644388e-05,
+        "ci_hi": 0.0009620361172504265,
+        "p_better": 0.9535
+      },
+      "vs_seed_mean": {
+        "diff": 0.0005238005138286721,
+        "ci_lo": 0.00021095325500109752,
+        "ci_hi": 0.0008521392139747751,
+        "p_better": 0.9995
+      },
+      "use_ensemble": true
+    }
+  ]
+}
