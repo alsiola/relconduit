@@ -12,7 +12,9 @@ Only after the owner has approved the run on its issue. Steps:
     `uv sync --all-extras --frozen`;
  4. restore any --checkpoint folders from Cloud Storage, run the command detached from SSH, save the checkpoints every
     few minutes and at the end, and echo the log here;
- 5. copy each --download back, delete the machine, and record its hours and price in the cost ledger on main.
+ 5. copy each --download back, delete the machine, record its hours and price in the cost ledger on main, then copy
+    the checkpoints back from Cloud Storage. Each copy back is one gcloud process and thread, and a try still going after
+    COPY_BACK_MINUTES is stopped and counts as failed, so a stalled transfer can't hold the run for hours.
 
 The exit code is the command's own. When the command succeeded but a step after it failed (a --download or the
 checkpoints didn't copy back, or the ledger push to main didn't land, each after several tries), it ends with
@@ -33,9 +35,11 @@ import posixpath
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,6 +54,11 @@ POLL_SECONDS = 60
 POST_RUN_FAILED = 3
 # gcloud storage's own part-written download files: never worth syncing, and one caught mid-write fails the whole copy.
 RSYNC_EXCLUDE = r"--exclude=.*\.gstmp$"
+# Copying back from Cloud Storage: one process and one thread, which is reliable where gcloud's default parallel
+# transfer has stalled for hours on a few 25 MB files (#40). Each file still takes seconds.
+STORAGE_SERIAL_ENV = {"CLOUDSDK_STORAGE_PROCESS_COUNT": "1", "CLOUDSDK_STORAGE_THREAD_COUNT": "1"}
+# Wall-clock limit on one try at a post-run copy, so a hang counts as a failed try and the retries get to run.
+COPY_BACK_MINUTES = 15
 REGION_NAMES = {
     "europe-west2": "London"
 }  # the Cloud Billing catalogue's names for the regions we use
@@ -183,6 +192,87 @@ def sync_lines(
     return "\n".join(out)
 
 
+def remove_partials(folder: Path) -> int:
+    """Delete gcloud's part-written `.gstmp` download files under folder (a stalled or killed copy leaves them), so
+    they're neither mistaken for checkpoints nor in the next try's way. Returns how many it removed."""
+    n = 0
+    for f in folder.rglob("*.gstmp") if folder.exists() else []:
+        if f.is_file():
+            f.unlink()
+            n += 1
+    return n
+
+
+def redo_copy_back(key: str, src: str, dst: str) -> str:
+    """The command a person or agent runs to finish a checkpoint copy-back by hand, as the runner would."""
+    env = " ".join(
+        f"{k}={v}"
+        for k, v in {"CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE": key, **STORAGE_SERIAL_ENV}.items()
+    )
+    return f"{env} gcloud storage rsync --recursive {shlex.quote(RSYNC_EXCLUDE)} {src} {dst}"
+
+
+def stream(
+    cmd: list[str],
+    env: dict | None = None,
+    input: str = "",
+    echo: bool = False,
+    timeout: float | None = None,
+) -> tuple[int, str, str, bool]:
+    """Runs cmd, echoing its output as it comes when asked, and kills it (and every process it started) if it's
+    still going after timeout seconds. Returns (exit code, stdout, stderr, whether it timed out)."""
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT if echo else subprocess.PIPE,
+        text=True,
+        env=env,
+        start_new_session=True,  # its own process group, so a kill reaches gcloud's worker processes too
+    )
+    timed_out = threading.Event()
+
+    def kill():
+        timed_out.set()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    timer = threading.Timer(timeout, kill) if timeout else None
+    if timer:
+        timer.daemon = True
+        timer.start()
+    # Drain stderr alongside stdout: read only after stdout closes, gcloud's progress output fills the stderr pipe
+    # and both ends wait on each other for ever.
+    err_parts: list[str] = []
+    err_reader = (
+        None if echo else threading.Thread(target=lambda: err_parts.append(proc.stderr.read()))
+    )
+    if err_reader:
+        err_reader.daemon = True
+        err_reader.start()
+    try:
+        out_lines = []
+        try:
+            proc.stdin.write(input)
+            proc.stdin.close()
+        except BrokenPipeError:  # it exited (or was stopped) without reading its input
+            pass
+        for line in proc.stdout:
+            out_lines.append(line)
+            if echo:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+        if err_reader:
+            err_reader.join()
+        code = proc.wait()
+    finally:
+        if timer:
+            timer.cancel()
+    return code, "".join(out_lines), "".join(err_parts), timed_out.is_set()
+
+
 def setup_script(gpu: bool) -> str:
     check_gpu = "nvidia-smi --query-gpu=name,memory.total --format=csv\n" if gpu else ""
     return f"""set -euo pipefail
@@ -227,13 +317,17 @@ echo started"""
 class Gcloud:
     def __init__(self, project: str, zone: str, dry_run: bool, key: str):
         self.project, self.zone, self.dry_run = project, zone, dry_run
+        self.key = key
         key_path = Path(key).expanduser()
         # Sign in as the Mac's service account when its key is here, so a person's lapsed login never stops a run.
-        self.env = (
-            {**os.environ, "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE": str(key_path)}
-            if key_path.exists()
-            else None
-        )
+        if key_path.exists():
+            self.env = {**os.environ, "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE": str(key_path)}
+        else:
+            self.env = None
+            print(
+                f"[cloud] no service-account key at {key}; gcloud runs under the person's own login, which can lapse",
+                file=sys.stderr,
+            )
 
     def run(
         self,
@@ -242,30 +336,23 @@ class Gcloud:
         allow_fail: bool = False,
         input: str = "",
         mutating: bool = False,
+        timeout: float | None = None,
+        env: dict | None = None,
     ):
+        """Runs one gcloud command. With timeout (seconds), a command still going then is killed and counts as failed
+        (raising unless allow_fail); env adds variables to the command's environment."""
         full = ["gcloud", *args, f"--project={self.project}", "--quiet"]
         if self.dry_run and mutating:
             print(f"[dry run] {' '.join(full)}")
             return 0, ""
-        proc = subprocess.Popen(
-            full,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT if echo else subprocess.PIPE,
-            text=True,
-            env=self.env,
-        )
-        out_lines = []
-        proc.stdin.write(input)
-        proc.stdin.close()
-        for line in proc.stdout:
-            out_lines.append(line)
-            if echo:
-                sys.stdout.write(line)
-                sys.stdout.flush()
-        err = "" if echo else proc.stderr.read()
-        code = proc.wait()
-        out = "".join(out_lines)
+        run_env = {**(self.env or os.environ), **env} if env else self.env
+        code, out, err, timed_out = stream(full, run_env, input, echo, timeout)
+        if timed_out:
+            code = code or 1
+            if not allow_fail:
+                raise RuntimeError(
+                    f"gcloud {' '.join(args[:3])} was still going after {timeout / 60:.0f} min, so it was stopped"
+                )
         if code != 0 and not allow_fail:
             tail = "\n".join((err or out).strip().splitlines()[-5:])
             raise RuntimeError(f"gcloud {' '.join(args[:3])} exited {code}: {tail}")
@@ -279,11 +366,12 @@ class Gcloud:
             **kw,
         )
 
-    def scp(self, src: str, dst: str):
+    def scp(self, src: str, dst: str, timeout: float | None = None):
         return self.run(
             ["compute", "scp", "--recurse", "--compress", f"--zone={self.zone}", src, dst],
             echo=True,
             mutating=True,
+            timeout=timeout,
         )
 
 
@@ -486,7 +574,7 @@ def run_once(plan: dict, name: str, hours: float) -> int | None:
         )
 
         try:  # copy back whether the command passed or not: a failed run's partial output is still worth reading
-            gc.scp(f"{name}:run.log", str(work / "run.log"))
+            gc.scp(f"{name}:run.log", str(work / "run.log"), timeout=COPY_BACK_MINUTES * 60)
         except RuntimeError:
             pass
         # A failed copy is retried, then noted: it mustn't stop the other downloads or the ledger.
@@ -495,7 +583,9 @@ def run_once(plan: dict, name: str, hours: float) -> int | None:
             local.parent.mkdir(parents=True, exist_ok=True)
             try:
                 retry(
-                    lambda d=d, local=local: gc.scp(f"{name}:repo/{d}", str(local.parent)),
+                    lambda d=d, local=local: gc.scp(
+                        f"{name}:repo/{d}", str(local.parent), timeout=COPY_BACK_MINUTES * 60
+                    ),
                     attempts=3,
                     base=10.0,
                     what=f"copying {d} back",
@@ -686,18 +776,28 @@ def main(argv: list[str] | None = None) -> int:
                 f"{prefix}/{c}",
                 str(ROOT / c),
             ]
-            try:  # rsync copies only what differs, so each try picks up just the files the last one missed
-                retry(
-                    lambda args=args: gc.run(args, echo=True, mutating=True),
-                    attempts=3,
-                    base=10.0,
-                    what=f"copying {prefix}/{c} back",
+
+            def copy_back(args=args, c=c):
+                remove_partials(
+                    ROOT / c
+                )  # a stalled or killed try leaves part-written files behind
+                gc.run(
+                    args,
+                    echo=True,
+                    mutating=True,
+                    timeout=COPY_BACK_MINUTES * 60,
+                    env=STORAGE_SERIAL_ENV,
                 )
+
+            try:  # rsync copies only what differs, so each try picks up just the files the last one missed
+                retry(copy_back, attempts=3, base=10.0, what=f"copying {prefix}/{c} back")
             except RuntimeError:
                 plan["problems"].append(
                     f"the checkpoints in {prefix}/{c} didn't copy back; they stay in the bucket for 30 days: "
-                    f"`gcloud storage rsync --recursive {shlex.quote(RSYNC_EXCLUDE)} {prefix}/{c} {c}`"
+                    f"`{redo_copy_back(cfg['runnerKey'], f'{prefix}/{c}', c)}`"
                 )
+            finally:
+                remove_partials(ROOT / c)
         if failed:  # an error is on its way out; still list what needs redoing
             finish(None, plan["problems"])
     return finish(exit_code, plan["problems"])
