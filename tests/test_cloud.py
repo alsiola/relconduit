@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 import pytest
@@ -114,3 +115,43 @@ def test_finish_keeps_the_command_result_apart_from_bookkeeping(capsys):
 def test_sync_lines_skip_gcloud_temp_files():
     for direction in ("save", "restore"):
         assert "gstmp" in cloud.sync_lines(["runs/x"], "gs://b/p", direction)
+
+
+def test_remove_partials(tmp_path: Path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "x.npy").write_bytes(b"1")
+    (tmp_path / "a" / "x.npy_.gstmp").write_bytes(b"1")
+    (tmp_path / "y.gstmp").write_bytes(b"1")
+    assert cloud.remove_partials(tmp_path) == 2
+    assert [p.name for p in tmp_path.rglob("*") if p.is_file()] == ["x.npy"]
+    assert cloud.remove_partials(tmp_path / "missing") == 0
+
+
+def test_stream_stops_a_hung_command_and_its_children():
+    start = time.monotonic()
+    # the shell starts a child that would hold the output pipe open; killing the group must reach it too
+    code, out, _, timed_out = cloud.stream(
+        ["bash", "-c", "echo started; sleep 30 & wait"], echo=False, timeout=1
+    )
+    assert timed_out and code != 0 and "started" in out
+    assert time.monotonic() - start < 10
+
+
+def test_stream_without_a_hang():
+    code, out, err, timed_out = cloud.stream(["bash", "-c", "cat; echo oops >&2"], input="hi")
+    assert (code, out, err.strip(), timed_out) == (0, "hi", "oops", False)
+
+
+def test_redo_copy_back_runs_as_the_runner_one_file_at_a_time():
+    cmd = cloud.redo_copy_back("~/key.json", "gs://b/p/runs/x", "runs/x")
+    assert "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=~/key.json" in cmd
+    assert "CLOUDSDK_STORAGE_PROCESS_COUNT=1" in cmd and "CLOUDSDK_STORAGE_THREAD_COUNT=1" in cmd
+    assert cmd.endswith("gs://b/p/runs/x runs/x") and "gstmp" in cmd
+
+
+def test_stream_drains_a_chatty_stderr():
+    # over a pipe's worth of stderr before any stdout: reading stderr only at the end would deadlock here
+    code, out, err, timed_out = cloud.stream(
+        ["bash", "-c", "head -c 300000 /dev/zero | tr '\\0' x >&2; echo done"], timeout=20
+    )
+    assert (code, out, timed_out) == (0, "done\n", False) and len(err) == 300000
