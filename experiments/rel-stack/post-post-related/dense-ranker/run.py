@@ -220,6 +220,13 @@ def main():
     p.add_argument("--extra", action="store_true", help="--final: with the extra train rows")
     p.add_argument("--test", action="store_true")
     p.add_argument("--leakage-seeds", type=int, default=40)
+    p.add_argument(
+        "--train-minutes",
+        type=float,
+        default=0.0,
+        help="--final: minutes the run that trained the saved models took, added to this "
+        "run's own time in results/ (else a scoring-only run records only its own minutes)",
+    )
     a = p.parse_args()
     t0 = time.time()
     out = Path(a.out) / ("smoke" if a.smoke else "")
@@ -490,13 +497,18 @@ def final_test(a, task, db, res, pairs_of, out, config, t0):
     S.to_parquet(out / "scores" / f"{tag}_test_scores.parquet")
     if a.smoke:
         return
-    runtime = (time.time() - t0) / 60
+    runtime = a.train_minutes + (time.time() - t0) / 60
     notes = (
         f"Variant {tag} (issue 29): issue 12's candidates and features plus "
         f"{res['n_features']} features in all; val candidate recall {res['recall']['all']:.3f} "
         f"({res['cands_per_row']:.0f} per row); LightGBM {config}, early stopping on val. "
         "Pair leakage check 0 mismatches. Google Cloud Spot, CPU."
     )
+    if a.train_minutes:
+        notes += (
+            f" runtime_minutes is the training run's {a.train_minutes:.1f} min plus this "
+            f"scoring run's {runtime - a.train_minutes:.1f} min."
+        )
     common = {
         "approach": APPROACH,
         "metric": "map",
