@@ -133,6 +133,11 @@ Everything ran on Google Cloud Spot `n2-custom-24-131072` (24 vCPUs, 128 GB, eur
 - **Run 2**, test once with the saved seed 0–2 models: 6 min of work (rebuilding the pairs 2.5 min, scoring
   0.2 min, plus setup), about 0.12 h billed, $0.05. Val reproduced run 1's .2309 exactly before test was scored.
 
+The first val/test pair in `results/rel-stack/post-post-related.jsonl` (2026-11-14, commit 2194f20) records
+`runtime_minutes` 2.7, which is run 2's process alone. `results/` is append-only, so a superseding pair dated
+2026-11-15 has the same values with 137.1 min (run 1's 134.4 plus run 2's 2.7; issue 31). Read the later pair.
+`--train-minutes` now adds the training run's time, so a scoring-only `--final` run records the whole cost.
+
 ```sh
 # Mac smoke test (150 seeds, 1 ranker seed, no results; 2.6 min): embed a small slice of each encoder with
 # embed.py --limit, put the two .npz files under the encoder names in a folder, and point --emb at it
@@ -144,7 +149,7 @@ uv run python experiments/rel-stack/post-post-related/dense-ranker/compare.py
 # run 2: test, once, with run 1's models
 uv run cloud-run --issue 29 --approved <link> --hours 1.5 --machine n2-custom-24-131072 --checkpoint runs/p29 --run p29-ablate \
   --download runs/p29/ablate/final.json --download results/rel-stack/post-post-related.jsonl \
-  -- uv run python -W ignore experiments/rel-stack/post-post-related/dense-ranker/run.py --final dense_minilm_100 --test
+  -- uv run python -W ignore experiments/rel-stack/post-post-related/dense-ranker/run.py --final dense_minilm_100 --test --train-minutes 134.4
 ```
 
 The checkpoint `gs://oddsworth-lab-runs/relconduit-29-p29-ablate/` (kept 30 days) holds the embeddings, every
