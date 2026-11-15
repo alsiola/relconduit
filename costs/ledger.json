@@ -178,6 +178,14 @@
       "priced": "entered"
     },
     {
+      "at": "2026-11-14T21:33",
+      "kind": "cloud",
+      "what": "relconduit-28-1a1dbcfcbc0 (pre-empted, ~0.78h at $0.384/h; final run first attempt)",
+      "issue": "28",
+      "usd": 0.3,
+      "priced": "entered"
+    },
+    {
       "at": "2026-11-14T22:45:24+00:00",
       "kind": "cloud",
       "what": "relconduit-28-1a1dc01a337: uv run python experiments/rel-trial/site-sponsor-run/cand-lgbm-v2/cloud28.py --out runs/cloud28f --plans final:22 --extr",
