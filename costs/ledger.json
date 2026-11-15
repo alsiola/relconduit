@@ -200,6 +200,14 @@
         "hours": 1.074,
         "usdPerHour": 0.3841
       }
+    },
+    {
+      "at": "2026-11-15T03:38",
+      "kind": "cloud",
+      "what": "relconduit-32-1a1dca80a5b (n2-custom-24-196608, ~2.95h at $0.494/h; refit32 final tables; runner's ledger push failed)",
+      "issue": "32",
+      "usd": 1.46,
+      "priced": "entered"
     }
   ]
 }
