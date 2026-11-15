@@ -74,8 +74,18 @@ KAPSO = {
 KAPSO_MEAN = 0.1837
 
 
+# Tasks whose ensemble averages seeds recorded under another row: rel-amazon user-item-rate's
+# refit (3 threads) picked a different config from issue 21's record, so its seeds are refit32's.
+SEED_ROWS = {
+    "rel-amazon/user-item-rate": (
+        "experiments/rec-board/refit32 (experiments/rel-amazon/user-item-rate/cand-lgbm-ranker)"
+    ),
+}
+
+
 def recorded(name: str, split: str) -> dict:
-    approach = f"experiments/{name}/{FINAL[name][0]}"
+    """The results row holding the seeds that ``name``'s tables come from."""
+    approach = SEED_ROWS.get(name, f"experiments/{name}/{FINAL[name][0]}")
     rows = [json.loads(x) for x in Path(f"results/{name}.jsonl").read_text().splitlines()]
     rows = [r for r in rows if r["approach"] == approach and r["split"] == split]
     if not rows:
