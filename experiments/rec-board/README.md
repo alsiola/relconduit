@@ -53,7 +53,10 @@ recommendation entries there.
 So on test, with the official evaluation: above every leaderboard entry on four tasks (rel-stack user-post-comment and
 rel-amazon purchase and rate clearly, rel-hm purchase narrowly), a tie on one, second on five. Nothing is submitted yet.
 Issue 22 built and validated the family's package from the seed-0 tables (board mean .1782, which would be 2nd to
-Kapso's .1837): see `SUBMISSION.md`. Ours beats every published baseline and both GNNs on all ten.
+Kapso's .1837). Issue 32 rebuilt it with issue 28's site-sponsor-run and issue 29's post-post-related, plus a seed
+rank-average ensemble wherever a val rule fixed in advance chose one (seven tasks; `ensemble32.py`,
+`ensemble32_val.md`). Board mean of the submitted tables: **.1851**, .0014 above Kapso's .1837, which would be 1st.
+The seed means alone give .1843. See `SUBMISSION.md`. Ours beats every published baseline and both GNNs on all ten.
 Val numbers, candidate recall and the grids are in each experiment README. Rows are in `results/<dataset>/<task>.jsonl`.
 
 ### Wave 1 detail (issue 12)
