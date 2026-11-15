@@ -1,7 +1,7 @@
 # Leaderboard submission draft: recommendation family (issues 22 and 32)
 
-**Nothing has been submitted.** This is a draft of what the RelBench submission form asks for. The package is built
-and checked. Submitting is the owner's call (issue 4).
+**Nothing has been submitted.** These are the final form values, agreed with the owner on issue 4 (2026-11-15). The
+owner sends the form and uploads the zip; the agents don't submit.
 
 ## The package
 
@@ -9,9 +9,10 @@ and checked. Submitting is the owner's call (issue 4).
   Each table is either seed 0 of the task's recorded final config, or the rank average of that config's recorded seeds.
   The choice was made on val by a rule fixed before any test scoring (below).
 - `python -m relbench.submit runs/ensemble32/preds --out runs/ensemble32/relconduit.zip` reports the recommendation
-  family **validated** (10/10 tasks) and writes `relconduit-recommendation.zip` (27.1 MB, sha256 `6ecc5f7f…89ade9`).
+  family **validated** (10/10 tasks) and writes `relconduit-recommendation.zip` (27.1 MB, sha256
+  `6ecc5f7ffd7382b6c39513614b4bc38fc44c507aa6ce3275a9a23b521489ade9`).
   The zip is in the private bucket at `gs://oddsworth-lab-runs/relconduit-32-refit32/package/` (kept 30 days) and on
-  the Mac under `runs/ensemble32/`. It and the tables stay out of git. The classification and regression families
+  the Mac under `runs/ensemble32/` and `~/relconduit-submission32/`. It and the tables stay out of git. The classification and regression families
   report FAIL in the same check because this package holds no tables for them.
 - The leaderboard takes one table per task, with no seeds or mean. Picking the best seed on test would select on test
   labels, which rule 1 forbids. The seed mean ± std is in the Note and below.
@@ -33,9 +34,9 @@ of its sources (post-post-related and site-sponsor-run) now come from newer expe
 
 ## Form fields
 
-| field | draft |
+| field | value |
 |---|---|
-| Name | `relconduit: candidates + LightGBM ranker` |
+| Name | `RelConduit: Candidates + LightGBM Ranker` |
 | In-context? | **No**. LightGBM is trained on each target database's train table. |
 | URL | https://github.com/alsiola/relconduit |
 | Repro link | https://github.com/alsiola/relconduit/blob/main/experiments/rec-board/SUBMISSION.md |
@@ -48,7 +49,7 @@ Note (shown on hover):
 > multi-hop walks over the relational graph, plus frozen MiniLM text kNN on rel-stack post-post-related, all from rows
 > strictly before the seed time), pair and entity aggregate features, and a LightGBM lambdarank/binary ranker.
 > Configs were chosen on val only. Each table is seed 0 or the rank average of the seeds, chosen on val by a fixed
-> rule. Test MAP over 3 seeds (5 on two tasks), mean ± std, is in the repro link. Built by Claude Code agents.
+> rule. Test MAP over 3 seeds (5 on two tasks), mean ± std, is in the repro link. Built by Open Conduit.
 
 ## Per-task numbers (test MAP@k, official `evaluate_task`)
 
@@ -70,7 +71,13 @@ On the recommendation board (`leaderboard.json`, read 2026-11-14), the submitted
 Kapso's .1837 by .0014. It would place **1st of 9**, ahead of Kapso, ID-GNN (.0933), LEDGER (.0875), GelGT (.0793) and
 LightGBM (.0759). The margin is small. From the seed stds, the board mean has a seed-to-seed sd of about .0007, so .0014
 is about two sds. The mean of the seed means, .1843, is only .0006 above Kapso. Kapso publishes one number per task,
-with no spread. The leaderboard must be read again before submitting.
+with no spread.
+
+Re-read 2026-11-15 before handoff: `leaderboard/leaderboard.json` on `stanford-star/relbench` main, which the site
+loads live, is unchanged since its last commit (a5c7130, 2026-11-12, a classification entry). Kapso's ten values and
+its .1837 mean are as above, and the open submissions upstream (441, 439, 437, 433) carry no recommendation tables. So
+the position is unchanged: 1st of 9 at .1851. Re-checking `relconduit-recommendation.zip` with
+`python -m relbench.submit` gave the same ten values and mean 18.51%, and the sha256 is unchanged.
 
 The tables beat Kapso on **six** tasks: rel-amazon purchase and rate, rel-hm purchase, rel-stack user-post-comment and
 post-post-related, and rel-trial condition-sponsor-run. By the seed mean the count is **five**: condition-sponsor-run
